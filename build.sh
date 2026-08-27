@@ -94,6 +94,7 @@ echo "==> Building CLI (${TARGET})"
 swiftc -O -wmo \
     -target "$TARGET" \
     Sources/DisplayAPI.swift Sources/DisplayBackend.swift Sources/CapabilityProbe.swift \
+    Sources/CommandLineOptions.swift \
     CLI/*.swift \
     -o "$CLI"
 

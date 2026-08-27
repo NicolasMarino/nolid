@@ -142,18 +142,21 @@ func recoverDirectly() -> Bool {
 
 // MARK: - Arguments
 
-var arguments = Array(CommandLine.arguments.dropFirst())
-let wantsJSON = arguments.contains("--json")
-let skipProbe = arguments.contains("--no-probe")
-arguments.removeAll { $0.hasPrefix("--") }
+let options = CommandLineOptions(arguments: Array(CommandLine.arguments.dropFirst()))
+let wantsJSON = options.wantsJSON
+let skipProbe = options.skipProbe
 
-guard let command = arguments.first else {
-    fail(usage, code: 2)
-}
-
-if command == "-h" || command == "--help" || command == "help" {
+if options.wantsHelp {
     print(usage)
     exit(0)
+}
+
+if let unknown = options.unknownOptions.first {
+    fail("nolid: unknown option '\(unknown)'\n\n\(usage)", code: 2)
+}
+
+guard let command = options.command else {
+    fail(usage, code: 2)
 }
 
 guard ["on", "off", "toggle", "panic", "status", "doctor"].contains(command) else {

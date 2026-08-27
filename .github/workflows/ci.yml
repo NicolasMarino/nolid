@@ -24,9 +24,13 @@ jobs:
 
       - name: Check the CLI answers
         run: |
+          # Asking for help must succeed. It did not, once.
           ./build/nolid --help > /dev/null
+          ./build/nolid -h > /dev/null
           # No app running on a CI runner, so this must exit 1, not hang.
           ./build/nolid status && exit 1 || test $? -eq 1
+          # An unknown option is a usage error, not a silent no-op.
+          ./build/nolid status --bogus && exit 1 || test $? -eq 2
 
       - name: Check App Intents metadata was generated
         run: |

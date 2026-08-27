@@ -139,7 +139,7 @@ the Shortcuts actions are missing.
 ## Install
 
 ```bash
-git clone <your-repo> nolid && cd nolid
+git clone https://github.com/NicolasMarino/nolid.git && cd nolid
 ./build.sh
 cp -R build/NoLid.app /Applications/
 open /Applications/NoLid.app

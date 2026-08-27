@@ -132,7 +132,7 @@ faltan las acciones de Atajos.
 ## Instalación
 
 ```bash
-git clone <tu-repo> nolid && cd nolid
+git clone https://github.com/NicolasMarino/nolid.git && cd nolid
 ./build.sh
 cp -R build/NoLid.app /Applications/
 open /Applications/NoLid.app

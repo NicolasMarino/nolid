@@ -445,6 +445,38 @@ test("toggling twice returns to where it started") {
     expect(manager.isBuiltInOff, before, "second toggle must flip it back")
 }
 
+// MARK: - CLI argument parsing
+
+test("every spelling of help is recognised") {
+    for spelling in ["--help", "-h", "help"] {
+        expect(CommandLineOptions(arguments: [spelling]).wantsHelp,
+               "\(spelling) must ask for help")
+    }
+    // The bug this exists for: filtering out `--` options before looking for
+    // the verb ate --help, so asking for help exited 2 with usage on stderr.
+    expect(CommandLineOptions(arguments: ["--help"]).command == nil,
+           "help is not a command to dispatch")
+}
+
+test("the verb is found regardless of where the options sit") {
+    expect(CommandLineOptions(arguments: ["doctor", "--json"]).command, "doctor", "options after")
+    expect(CommandLineOptions(arguments: ["--json", "doctor"]).command, "doctor", "options before")
+    expect(CommandLineOptions(arguments: []).command == nil, "no arguments means no verb")
+}
+
+test("flags are read wherever they appear") {
+    let options = CommandLineOptions(arguments: ["doctor", "--json", "--no-probe"])
+    expect(options.wantsJSON, "--json must be seen")
+    expect(options.skipProbe, "--no-probe must be seen")
+    expect(options.unknownOptions.isEmpty, "known flags are not unknown")
+}
+
+test("an unknown option is reported rather than silently dropped") {
+    let options = CommandLineOptions(arguments: ["status", "--jsonn"])
+    expect(options.unknownOptions, ["--jsonn"], "a typo must not pass for the real flag")
+    expect(options.command, "status", "the verb is still found")
+}
+
 // MARK: - Report
 
 if failures.isEmpty {
