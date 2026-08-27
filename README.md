@@ -16,6 +16,10 @@
   <strong>English</strong> · <a href="README.es.md">Español</a>
 </p>
 
+<p align="center">
+  <img src="docs/menu.gif" alt="The NoLid menu with the built-in display off and two external monitors connected" width="489">
+</p>
+
 ---
 
 ## The problem
