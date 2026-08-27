@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds NoLid.app with no Xcode project.
+# Builds NoLid.app and the `nolid` CLI with no Xcode project.
 # Requires the Command Line Tools:  xcode-select --install
 #
 set -euo pipefail
@@ -8,13 +8,15 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 APP_NAME="NoLid"
+CLI_NAME="nolid"
 BUNDLE_ID="dev.nolid.app"
 APP="build/${APP_NAME}.app"
+CLI="build/${CLI_NAME}"
 ARCH="$(uname -m)"
 TARGET="${ARCH}-apple-macos13.0"
 
 echo "==> Cleaning"
-rm -rf "$APP"
+rm -rf "$APP" "$CLI"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "==> Bundle"
@@ -86,12 +88,24 @@ else
     echo "    skipped: needs the full Xcode toolchain, Shortcuts actions will be missing"
 fi
 
+echo "==> Building CLI (${TARGET})"
+# The CLI shares DisplayAPI with the app: `panic`, `on` and `doctor` have to
+# work without the app running.
+swiftc -O -wmo \
+    -target "$TARGET" \
+    Sources/DisplayAPI.swift Sources/DisplayBackend.swift Sources/CapabilityProbe.swift \
+    CLI/*.swift \
+    -o "$CLI"
+
 echo "==> Signing (ad-hoc)"
 codesign --force --sign - --identifier "$BUNDLE_ID" "$APP"
+codesign --force --sign - --identifier "${BUNDLE_ID}.cli" "$CLI"
 touch "$APP"   # invalidates the LaunchServices cache
 
 echo
 echo "Done: $APP"
+echo "       $CLI"
 echo
 echo "Try:      open $APP"
 echo "Install:  cp -R $APP /Applications/ && open /Applications/${APP_NAME}.app"
+echo "CLI:      sudo cp $CLI /usr/local/bin/ && ${CLI_NAME} doctor"
