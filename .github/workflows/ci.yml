@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swift --version
+
+      # Runs first: a failing expectation should stop the job before the
+      # slower app build, and the suite needs no App Intents tooling.
+      - name: Test
+        run: ./test.sh
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Check the CLI answers
+        run: |
+          ./build/nolid --help > /dev/null
+          # No app running on a CI runner, so this must exit 1, not hang.
+          ./build/nolid status && exit 1 || test $? -eq 1
+
+      - name: Check App Intents metadata was generated
+        run: |
+          test -f build/NoLid.app/Contents/Resources/Metadata.appintents/extract.actionsdata
+          # Mangled names must carry the real module, or Shortcuts lists the
+          # actions and fails to run them.
+          grep -q '5NoLid' build/NoLid.app/Contents/Resources/Metadata.appintents/extract.actionsdata
