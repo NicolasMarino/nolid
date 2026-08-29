@@ -109,7 +109,17 @@ enum DisplayAPI {
 
     /// `true` when `id` is the *mirrored* display of a mirror set, not the master.
     static func isMirroringAnother(_ id: CGDirectDisplayID) -> Bool {
-        CGDisplayMirrorsDisplay(id) != nullDisplay
+        mirrorSource(of: id) != nil
+    }
+
+    /// The display `id` is mirroring, or `nil` when it is mirroring nothing.
+    ///
+    /// Knowing *which* one matters: a mirror set that changed master is no
+    /// longer the one this app built, and tearing it down would be undoing
+    /// somebody else's decision.
+    static func mirrorSource(of id: CGDirectDisplayID) -> CGDirectDisplayID? {
+        let master = CGDisplayMirrorsDisplay(id)
+        return master == nullDisplay ? nil : master
     }
 
     // MARK: - Stable identity
@@ -119,11 +129,25 @@ enum DisplayAPI {
     /// `CGDirectDisplayID` is reassigned on reconnect, so it cannot be used to
     /// remember preferences across sessions. The UUID can: it is stable for the
     /// same physical panel on the same port.
+    /// - Note: not every panel has one. Docks, KVMs and virtual displays can
+    ///   fail to report the EDID this is derived from, so there is a fallback
+    ///   built from the vendor, model and serial numbers. Those are also stable
+    ///   across reconnect, which is the only property that matters here — two
+    ///   identical monitors with no serial collapse into the same string, and
+    ///   for keying a *set* of monitors that is still a correct answer.
     static func uuid(_ id: CGDirectDisplayID) -> String? {
-        guard let ref = CGDisplayCreateUUIDFromDisplayID(id) else { return nil }
-        let cfuuid = ref.takeRetainedValue()
-        guard let string = CFUUIDCreateString(nil, cfuuid) else { return nil }
-        return string as String
+        if let ref = CGDisplayCreateUUIDFromDisplayID(id) {
+            let cfuuid = ref.takeRetainedValue()
+            if let string = CFUUIDCreateString(nil, cfuuid) { return string as String }
+        }
+
+        let vendor = CGDisplayVendorNumber(id)
+        let model = CGDisplayModelNumber(id)
+        let serial = CGDisplaySerialNumber(id)
+        // `0xFFFFFFFF` is what CoreGraphics reports when it knows nothing, and
+        // an id-derived key would change on every reconnect: worse than none.
+        guard vendor != 0xFFFF_FFFF || model != 0xFFFF_FFFF else { return nil }
+        return "edid-\(vendor)-\(model)-\(serial)"
     }
 
     /// Human-readable display name, as shown in System Settings.

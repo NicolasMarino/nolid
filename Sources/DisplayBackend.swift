@@ -30,6 +30,7 @@ protocol DisplayBackend {
     func isBuiltIn(_ id: CGDirectDisplayID) -> Bool
     func builtInDisplay() -> CGDirectDisplayID?
     func isMirroringAnother(_ id: CGDirectDisplayID) -> Bool
+    func mirrorSource(of id: CGDirectDisplayID) -> CGDirectDisplayID?
 
     func uuid(_ id: CGDirectDisplayID) -> String?
     func name(_ id: CGDirectDisplayID) -> String
@@ -51,6 +52,10 @@ struct SystemDisplayBackend: DisplayBackend {
     func isBuiltIn(_ id: CGDirectDisplayID) -> Bool { DisplayAPI.isBuiltIn(id) }
     func builtInDisplay() -> CGDirectDisplayID? { DisplayAPI.builtInDisplay() }
     func isMirroringAnother(_ id: CGDirectDisplayID) -> Bool { DisplayAPI.isMirroringAnother(id) }
+
+    func mirrorSource(of id: CGDirectDisplayID) -> CGDirectDisplayID? {
+        DisplayAPI.mirrorSource(of: id)
+    }
 
     func uuid(_ id: CGDirectDisplayID) -> String? { DisplayAPI.uuid(id) }
     func name(_ id: CGDirectDisplayID) -> String { DisplayAPI.name(id) }

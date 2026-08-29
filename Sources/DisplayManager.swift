@@ -22,6 +22,8 @@ final class DisplayManager {
         static let savedBrightness = "savedBuiltInBrightness"
         static let preferredMaster = "preferredMirrorMasterUUID"
         static let notifyOnChange = "notifyOnChange"
+        static let mirrorFallback = "usingMirrorFallback"
+        static let mirrorFallbackMaster = "usingMirrorFallbackMasterUUID"
     }
 
     private let defaults: UserDefaults
@@ -77,6 +79,52 @@ final class DisplayManager {
         }
     }
 
+    /// `true` when the built-in is mirroring because *this app* put it there.
+    ///
+    /// Persisted on purpose. It is the only record of "the mirror is ours, tear
+    /// it down"; if it lived in memory a crash would leave the panel mirrored at
+    /// zero brightness with nothing left that knows to undo it. It is also the
+    /// reason a mirror the user configured themselves is never touched, so it
+    /// cannot be replaced by asking the hardware.
+    private var usingMirrorFallback: Bool {
+        get { defaults.bool(forKey: Key.mirrorFallback) }
+        set { defaults.set(newValue, forKey: Key.mirrorFallback) }
+    }
+
+    /// UUID of the display we mirrored onto, recorded alongside the flag.
+    ///
+    /// "We are mirroring" is not enough to claim ownership. Someone who changes
+    /// the mirror set in System Settings leaves the flag true and the mirror
+    /// theirs; only the master identifies the arrangement this app actually
+    /// built.
+    private var mirrorFallbackMaster: String? {
+        get { defaults.string(forKey: Key.mirrorFallbackMaster) }
+        set { defaults.set(newValue, forKey: Key.mirrorFallbackMaster) }
+    }
+
+    /// Drops the ownership claim when the hardware no longer matches it.
+    ///
+    /// Called on launch and on every hardware change, because both are moments
+    /// when the mirror set can have become something we did not build: a reboot
+    /// destroys it outright, and System Settings can rebuild it against another
+    /// monitor entirely.
+    private func reconcileMirrorOwnership() {
+        guard usingMirrorFallback else { return }
+        guard let builtIn = builtInID else { return }
+
+        let source = backend.mirrorSource(of: builtIn)
+        let stillOurs = source.map { current in
+            // No recorded master means the claim predates this bookkeeping.
+            // Mirroring at all is the most that can be honestly concluded.
+            mirrorFallbackMaster.map { $0 == backend.uuid(current) } ?? true
+        } ?? false
+
+        if !stillOurs {
+            usingMirrorFallback = false
+            mirrorFallbackMaster = nil
+        }
+    }
+
     /// UUID of the monitor acting as master in the mirroring fallback.
     /// `nil` means whichever the system returns first.
     var preferredMasterUUID: String? {
@@ -99,7 +147,6 @@ final class DisplayManager {
 
     private var cachedBuiltIn: CGDirectDisplayID?
     private var lastExternalCount = -1
-    private var usingMirrorFallback = false
     private var debounce: DispatchWorkItem?
     private var watchdog: Timer?
     private var wakeObserver: NSObjectProtocol?
@@ -181,6 +228,10 @@ final class DisplayManager {
 
         lastExternalCount = externalDisplays.count
         lastAnnouncedOff = isBuiltInOff
+        // The flag survives a crash on purpose, so it can outlive the mirror it
+        // describes. Left stale it would authorise us to break a mirror the
+        // user built themselves.
+        reconcileMirrorOwnership()
         adoptPreferenceForCurrentTopology()
         apply()
     }
@@ -223,7 +274,11 @@ final class DisplayManager {
     /// - Note: it does not touch the saved profile. Panic is an emergency exit,
     ///   not a preference decision: if it wrote one, a single press would erase
     ///   what the user chose for this set of monitors.
-    func enableAllDisplays(resetPreference: Bool = true) {
+    /// - Returns: `true` once at least one display is verified active. The CLI's
+    ///   own recovery path has always checked this; the in-app panic button
+    ///   returning silently was the weaker of the two.
+    @discardableResult
+    func enableAllDisplays(resetPreference: Bool = true) -> Bool {
         if resetPreference { desiredOff = false }
 
         // A disabled built-in may not show up in `onlineDisplays()`, so the
@@ -234,12 +289,34 @@ final class DisplayManager {
 
         // Only undo the mirror this app created, never one the user configured
         // on purpose.
-        if usingMirrorFallback, let builtIn = builtInID {
+        let wasOurMirror = usingMirrorFallback
+        if wasOurMirror, let builtIn = builtInID {
             backend.setMirror(builtIn, of: nil)
-            restoreBrightness()
+            if !backend.isMirroringAnother(builtIn) {
+                restoreBrightness()
+                usingMirrorFallback = false
+                mirrorFallbackMaster = nil
+            }
+        } else {
+            usingMirrorFallback = false
+            mirrorFallbackMaster = nil
         }
-        usingMirrorFallback = false
+
+        // A mirrored display still counts as "active", so the display list alone
+        // cannot tell recovery from a panel left mirroring at zero brightness.
+        // The CLI's recovery path has always checked both; this is the parity
+        // the doc comment above claims.
+        var recovered = !backend.activeDisplays().isEmpty
+        if recovered, wasOurMirror, let builtIn = builtInID,
+           backend.isMirroringAnother(builtIn) {
+            recovered = false
+        }
+        if !recovered {
+            notices.warn("No display could be restored. From another machine: "
+                + "`ssh` in and run `nolid panic`.")
+        }
         notifyChange()
+        return recovered
     }
 
     // MARK: - Engine
@@ -275,31 +352,71 @@ final class DisplayManager {
         }
 
         guard let master = mirrorMaster else {
-            desiredOff = false
+            abandonDesiredOff("No monitor available to mirror onto: "
+                + "the built-in display cannot be turned off.")
             return
         }
 
         saveBrightness(of: builtIn)
         if backend.setMirror(builtIn, of: master) {
             usingMirrorFallback = true
+            mirrorFallbackMaster = backend.uuid(master)
             backend.setBrightness(builtIn, 0)
             notices.resetThrottle()
         } else {
-            // Without this, `apply()` would retry every 1.2s in a loop.
-            desiredOff = false
-            notices.warn("Neither method could turn the built-in display off.")
+            abandonDesiredOff("Neither method could turn the built-in display off.")
         }
     }
 
-    private func turnOn(_ builtIn: CGDirectDisplayID) {
-        if usingMirrorFallback {
+    /// Gives up on turning the built-in off, and makes sure nothing on disk
+    /// keeps asking for it.
+    ///
+    /// Clearing `desiredOff` alone stops `apply()` retrying every 1.2s, but a
+    /// profile saved a moment earlier by `setBuiltInOff` would still say "off"
+    /// for this set of monitors and replay the same failing sequence on every
+    /// future reconnect.
+    private func abandonDesiredOff(_ reason: String) {
+        desiredOff = false
+        if profiles.enabled { profiles.remember(false, for: topologyKey) }
+        notices.warn(reason)
+    }
+
+    /// Brings the built-in back. Idempotent.
+    ///
+    /// - Returns: `true` only once the display is verified usable. The way back
+    ///   is checked as suspiciously as the way out: the same symbol that can
+    ///   report a successful disable and do nothing can do it on re-enable, and
+    ///   a silent failure here is the one outcome this whole app exists to
+    ///   prevent.
+    @discardableResult
+    private func turnOn(_ builtIn: CGDirectDisplayID) -> Bool {
+        let wasOurMirror = usingMirrorFallback
+        if wasOurMirror {
             backend.setMirror(builtIn, of: nil)
-            restoreBrightness()
-            usingMirrorFallback = false
+            // The flag is cleared only once the mirror is verifiably gone.
+            // Clearing it on a failed attempt would be worse than not trying:
+            // the next call would read "not ours", skip the undo entirely and
+            // report success, with the panel still mirrored at zero brightness.
+            if !backend.isMirroringAnother(builtIn) {
+                restoreBrightness()
+                usingMirrorFallback = false
+                mirrorFallbackMaster = nil
+            }
         }
         if !backend.activeDisplays().contains(builtIn) {
             backend.setEnabled(builtIn, true)
         }
+
+        // Only our own mirror counts as a failure to undo. One the user set up
+        // is a legitimate resting state, not something left half-torn-down.
+        let active = backend.activeDisplays().contains(builtIn)
+        let mirrorStuck = wasOurMirror && backend.isMirroringAnother(builtIn)
+        guard active, !mirrorStuck else {
+            notices.warn("The built-in display could not be turned back on. "
+                + "Run `nolid panic`, or connect an external monitor.")
+            return false
+        }
+        return true
     }
 
     /// In automatic mode topology rules: externals present -> built-in off.
@@ -347,6 +464,8 @@ final class DisplayManager {
 
     /// Exposed for tests: simulates the debounced hardware-change reaction.
     func reconcile() {
+        reconcileMirrorOwnership()
+
         let count = externalDisplays.count
         let topologyChanged = count != lastExternalCount
         lastExternalCount = count
@@ -431,8 +550,12 @@ final class DisplayManager {
 
 // C callback: captures no context, it only references the global singleton.
 private let reconfigurationCallback: CGDisplayReconfigurationCallBack = { _, flags, _ in
+    // The mirror flags matter as much as the rest: the mirroring fallback is one
+    // of the two ways the built-in gets turned off, so a mirror set torn down or
+    // rebuilt out-of-band is a state change we have to reconcile against.
     let interesting: CGDisplayChangeSummaryFlags = [
-        .addFlag, .removeFlag, .enabledFlag, .disabledFlag, .setModeFlag, .desktopShapeChangedFlag
+        .addFlag, .removeFlag, .enabledFlag, .disabledFlag,
+        .setModeFlag, .desktopShapeChangedFlag, .mirrorFlag, .unMirrorFlag
     ]
     guard !flags.intersection(interesting).isEmpty else { return }
     DispatchQueue.main.async { DisplayManager.shared.scheduleReconcile() }
