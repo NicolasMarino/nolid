@@ -33,8 +33,19 @@ final class FakeDisplayBackend: DisplayBackend {
     var hardDisableRejects = false
     /// Mirroring is unavailable too, leaving no way to turn the panel off.
     var mirrorFails = false
+    /// The way back fails: the display stays hard-disabled however many times
+    /// it is asked to come back. This is the catastrophic case — the user is
+    /// left with no screen — and the one the suite could not represent before.
+    var reEnableFails = false
+    /// Undoing a mirror fails, so the panel stays mirrored at zero brightness.
+    var unmirrorFails = false
 
     private(set) var setEnabledCalls: [(CGDirectDisplayID, Bool)] = []
+
+    /// Fires after each `setEnabled`, so a test can change the hardware halfway
+    /// through an operation. Real monitors get unplugged mid-transaction, and
+    /// the branches that handle it are unreachable any other way.
+    var afterSetEnabled: ((CGDirectDisplayID, Bool) -> Void)?
 
     // MARK: Setup helpers
 
@@ -62,15 +73,23 @@ final class FakeDisplayBackend: DisplayBackend {
     }
 
     func isMirroringAnother(_ id: CGDirectDisplayID) -> Bool { mirrors[id] != nil }
+    func mirrorSource(of id: CGDirectDisplayID) -> CGDirectDisplayID? { mirrors[id] }
 
-    func uuid(_ id: CGDirectDisplayID) -> String? { "uuid-\(id)" }
+    /// No display reports a stable identity — docks, KVMs and virtual displays.
+    var uuidsUnavailable = false
+
+    func uuid(_ id: CGDirectDisplayID) -> String? {
+        uuidsUnavailable ? nil : "uuid-\(id)"
+    }
     func name(_ id: CGDirectDisplayID) -> String { id == builtIn ? "Built-in" : "Monitor \(id)" }
 
     @discardableResult
     func setEnabled(_ id: CGDirectDisplayID, _ enabled: Bool) -> Bool {
         setEnabledCalls.append((id, enabled))
+        defer { afterSetEnabled?(id, enabled) }
 
         if enabled {
+            guard !reEnableFails else { return false }
             hardDisabled.remove(id)
             if !online.contains(id) { online.append(id) }
             return true
@@ -84,8 +103,13 @@ final class FakeDisplayBackend: DisplayBackend {
 
     @discardableResult
     func setMirror(_ id: CGDirectDisplayID, of master: CGDirectDisplayID?) -> Bool {
+        if master == nil {
+            guard !unmirrorFails else { return false }
+            mirrors.removeValue(forKey: id)
+            return true
+        }
         guard !mirrorFails else { return false }
-        if let master { mirrors[id] = master } else { mirrors.removeValue(forKey: id) }
+        mirrors[id] = master
         return true
     }
 

@@ -8,7 +8,7 @@
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/macOS-13%2B-black?logo=apple">
   <img alt="language" src="https://img.shields.io/badge/Swift-5-orange?logo=swift">
-  <img alt="size" src="https://img.shields.io/badge/c%C3%B3digo-1.7k%20l%C3%ADneas-blue">
+  <img alt="size" src="https://img.shields.io/badge/c%C3%B3digo-2.6k%20l%C3%ADneas-blue">
   <img alt="license" src="https://img.shields.io/badge/licencia-MIT-green">
   <img alt="deps" src="https://img.shields.io/badge/dependencias-0-lightgrey">
 </p>
@@ -40,7 +40,7 @@ Esto es esa función. Nada más.
 | Apagar la integrada con la tapa abierta | ✅ | ✅ |
 | Precio | Gratis (MIT) | $21.99 |
 | Escala de resolución, HiDPI, PIP, XDR... | ❌ | ✅ |
-| Tamaño | 1.7k líneas, 0 dependencias | Aplicación completa |
+| Tamaño | 2.6k líneas, 0 dependencias | Aplicación completa |
 | Telemetría / cuenta / licencia | ❌ | Licencia |
 
 Si quieres el resto de lo que hace BetterDisplay, cómpralo: es buen software.
@@ -230,9 +230,17 @@ Opciones: `--json` para salida legible por máquina (`status` y `doctor`),
 `--no-probe` para que `doctor` omita la prueba en vivo.
 
 Códigos de salida: `0` correcto, `1` la app no responde, `2` uso incorrecto,
-`3` el comando no surtió efecto — típicamente `nolid off` sin monitores externos.
+`3` el comando no surtió efecto — típicamente `nolid off` sin monitores
+externos — y `4` una pantalla quedó inutilizable y no se pudo recuperar.
 Todos los comandos verifican el resultado consultando el estado después de
 enviarlo: un script puede distinguir "hecho" de "ignorado".
+
+`3` y `4` están separados a propósito. `3` es una operación sin efecto y sin
+consecuencias: no pasó nada y no hay nada roto. `4` significa que ahora mismo
+hay algo mal en pantalla: `nolid doctor` lo devuelve cuando su prueba en vivo
+apagó la integrada y no logró recuperarla, y `nolid panic` y `nolid on` lo
+devuelven cuando la recuperación falló de verdad. Un script puede condicionar
+sólo sobre `4` para avisar a una persona.
 
 La CLI **no toca las pantallas**. Le pide a la app que corre en la barra de
 menús que lo haga, por `DistributedNotificationCenter`. Así hay un único proceso
@@ -244,6 +252,38 @@ Ejemplo con `jq`:
 ```bash
 nolid status --json | jq -r '.method'   # skylight | mirroring
 ```
+
+### Qué puede y qué no puede hacer el canal de control
+
+`DistributedNotificationCenter` es un bus por usuario, visible en todo el
+sistema. Cualquier proceso que corra con el mismo usuario puede publicar
+`dev.nolid.command.off` y apagar la pantalla integrada, exactamente igual que la
+CLI. Lo mismo vale para el esquema `nolid://`, que una página web puede disparar
+una vez aceptado el aviso de "abrir en NoLid?" que aparece la primera vez.
+
+Es el compromiso deliberado por no necesitar **ningún permiso, ningún puerto
+abierto y ningún servicio XPC**. Lo peor que puede hacer un proceso local hostil
+es alternar una pantalla — lo mismo que puedes hacer tú desde el menú — y todas
+las redes de seguridad siguen aplicando: el watchdog, el callback de
+reconfiguración y `nolid panic` siguen devolviendo la imagen. El canal no cruza
+cuentas de usuario.
+
+Las respuestas van dirigidas, no se emiten a todo el bus. Cada invocación de
+`nolid` genera un token aleatorio, lo envía junto con el comando y escucha en un
+canal derivado de él. Dos procesos `nolid` simultáneos no pueden leer la
+respuesta del otro, y un proceso que nunca vio el token no puede depositar una
+respuesta falsa en el canal de quien preguntó.
+
+Esto no es una frontera de seguridad y no se presenta como tal. Un proceso que
+corra con el mismo usuario puede observar el comando, leer el token y ganarle la
+carrera a la respuesta real. macOS no traza ninguna línea entre procesos del
+mismo usuario — otro proceso podría igualmente adjuntar un depurador o
+reemplazar el binario — así que ningún esquema de tokens cierra eso. No conviene
+programar una decisión sensible para la privacidad, como iniciar una grabación o
+compartir la pantalla, basándose sólo en la salida de `nolid status`.
+
+`nolid status` además informa los nombres de los monitores y la topología, así
+que trata su salida como cualquier otro detalle local del sistema.
 
 ### Atajos y automatizaciones
 
@@ -301,9 +341,12 @@ Se llama dentro de una transacción `CGBeginDisplayConfiguration` /
 la misma técnica que usan BetterDisplay y proyectos similares.
 
 **No** requiere desactivar SIP ni entitlements especiales: el símbolo se
-resuelve con `dlsym` en tiempo de ejecución, así que si Apple lo quita en una
-versión futura la app no crashea — sólo pierde el método fuerte y cae al
-respaldo.
+resuelve con `dlsym` en tiempo de ejecución. Si Apple lo quita en una versión
+futura, `dlsym` no devuelve nada, NoLid pierde el método fuerte y cae al
+respaldo de forma limpia: ese caso está contemplado. Si en cambio Apple conserva
+el nombre y cambia la firma de la función, ninguna comprobación en tiempo de
+ejecución puede detectarlo y el comportamiento queda indefinido. Es el límite
+conocido de llamar a un símbolo privado sin versionar.
 
 `CGCompleteDisplayConfiguration` se llama con `.forSession`, no con
 `.permanently`. El cambio no se escribe en las preferencias del sistema y
@@ -352,6 +395,10 @@ Además:
 - `apply()` es idempotente y la ruta de encendido se ejecuta
   **incondicionalmente**: también restaura el brillo si macOS deshizo el espejo
   por su cuenta.
+- **El camino de vuelta se verifica con el mismo rigor que el de ida.** Al
+  encender la integrada se vuelve a leer la lista de pantallas activas en vez de
+  dar por hecho que la llamada funcionó, y se avisa si el panel no volvió de
+  verdad. Un fallo al restaurar se informa, no se pasa por alto.
 - **Ningún aviso bloquea el run loop.** Los mensajes salen por
   `UNUserNotificationCenter` o, si no hay permiso, por un panel flotante que se
   cierra solo. Un `NSAlert` modal disparado desde el watchdog dejaría la app sin
@@ -563,12 +610,16 @@ protocolos, así que la suite puede ponerlo en estados que el hardware real no
 reproduce a pedido: el símbolo privado que devuelve éxito sin apagar nada, el
 sistema que rechaza la llamada, los dos métodos fallando a la vez, el último
 externo desconectado con el espejo puesto, el watchdog con cero pantallas
-activas, y un perfil guardado compitiendo con el modo automático en las dos
-direcciones.
+activas, un perfil guardado compitiendo con el modo automático en las dos
+direcciones, un reencendido fallido que se informa en vez de pasar en silencio,
+el respaldo de mirroring sobreviviendo a un crash y un espejo configurado por el
+propio usuario que nunca se deshace, un fallo al apagar que nunca se persiste
+como un perfil que reintenta para siempre, y una pantalla sin UUID estable que
+aun así obtiene una clave que sobrevive a la reconexión.
 
 Sin XCTest y sin `Package.swift`, para que combine con el resto del proyecto:
 un binario que sale con código distinto de cero en la primera expectativa que
-falla.
+falla. 134 expectativas al momento de escribir esto.
 
 Cada arreglo de un bug real lleva un test que falla sin él. Los dos bugs de
 perfiles que salieron en la revisión están fijados así.

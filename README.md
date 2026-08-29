@@ -65,7 +65,7 @@ Displays
   external   LG UltraFine              00000000-5555-6666-7777-888888888888
 
 Live probe
-  the built-in disappeared from the active display list and came back
+  the built-in display left the active display list and came back
 
 Verdict
   This Mac supports hard disable. NoLid will turn the backlight off.
@@ -235,8 +235,15 @@ Topology:        DELL U2720Q + LG UltraFine
 
 Exit codes: `0` success, `1` the app is required and isn't answering, `2` bad
 usage, `3` the command had no effect — typically `nolid off` with no external
-monitors. Every command verifies the result by reading state back after sending
-it, so a script can tell "done" from "ignored".
+monitors — and `4` a display was left unusable and could not be recovered.
+Every command verifies the result by reading state back after sending it, so a
+script can tell "done" from "ignored".
+
+`3` and `4` are deliberately separate. `3` is a benign no-op: nothing happened
+and nothing is broken. `4` means something is actually wrong on screen right
+now — `nolid doctor` returns it when its live probe disabled the built-in
+display and could not bring it back, and `nolid panic` and `nolid on` return it
+when recovery genuinely failed. A script can gate on `4` alone to page a human.
 
 For normal operations the CLI **does not touch displays**. It asks the menu bar
 app to do it, over `DistributedNotificationCenter`, so one process owns the
@@ -250,6 +257,35 @@ Options: `--json` for machine-readable output (`status` and `doctor`),
 nolid doctor --json | jq -r '.probe.outcome'
 # hard-disable-works | reports-success-does-nothing | call-rejected | symbol-unavailable
 ```
+
+### What the control channel can and can't do
+
+`DistributedNotificationCenter` is a per-user, system-wide bus. Any process
+running as the same user can post `dev.nolid.command.off` and turn the built-in
+display off, exactly as the CLI does. The same is true of the `nolid://` scheme,
+which a web page can trigger once you have answered the one-time "open in
+NoLid?" prompt.
+
+That is the deliberate trade-off for needing **no permissions, no open ports and
+no XPC service**. The worst a hostile local process can do is toggle a display —
+the same thing you can do from the menu — and every safety net still applies:
+the watchdog, the reconfiguration callback and `nolid panic` all still bring the
+screen back. The channel does not cross user accounts.
+
+Replies are addressed, not broadcast. Each `nolid` invocation invents a random
+token, sends it with the command, and listens on a channel derived from it. Two
+`nolid` processes running at once can't read each other's answers, and a process
+that never saw the token can't land a forged reply on the caller at all.
+
+That is not a security boundary, and isn't sold as one. A process running as the
+same user can observe the command, read the token and race the real reply. macOS
+draws no line between same-user processes — one could equally attach a debugger
+or replace the binary — so no token scheme closes that. Don't script a
+privacy-sensitive decision, like starting a recording or sharing a screen, on
+`nolid status` output alone.
+
+`nolid status` also reports monitor names and topology, so treat its output the
+way you would treat any other local system detail.
 
 ### Shortcuts and automations
 
@@ -307,8 +343,11 @@ It's called inside a `CGBeginDisplayConfiguration` /
 technique BetterDisplay and similar projects use.
 
 It does **not** require disabling SIP or any special entitlement: the symbol is
-resolved with `dlsym` at runtime, so if Apple removes it in a future release the
-app doesn't crash — it just loses the strong method and falls back.
+resolved with `dlsym` at runtime. If Apple removes it in a future release,
+`dlsym` returns nothing, NoLid loses the strong method and falls back cleanly —
+that case is handled. If Apple instead keeps the name and changes the function's
+signature, no runtime check can catch it and the behaviour is undefined. That is
+the known limit of calling an unversioned private symbol.
 
 `CGCompleteDisplayConfiguration` is called with `.forSession`, not
 `.permanently`. The change is never written to system preferences and disappears
@@ -357,6 +396,10 @@ On top of that:
   inside the process; this one doesn't. It runs over SSH too.
 - `apply()` is idempotent and the enable path runs **unconditionally**: it also
   restores brightness if macOS tore the mirror set down on its own.
+- **The way back is verified as strictly as the way out.** Turning the built-in
+  display on re-reads the active display list rather than assuming the call
+  worked, and warns you when the panel didn't actually come back. A failed
+  restore is reported, not swallowed.
 - **No notice blocks the run loop.** Messages go through
   `UNUserNotificationCenter` or, without permission, a floating panel that
   dismisses itself. A modal `NSAlert` fired from the watchdog would leave the
@@ -581,17 +624,22 @@ so the suite can put it into states real hardware won't reproduce on demand:
 - the private symbol returns success and disables nothing
 - the system rejects the call outright
 - both methods fail, and the built-in has to stay usable
+- a failed re-enable being reported instead of passing silently
 - the last external is unplugged while the mirror is up
+- the mirroring fallback surviving a crash, and a mirror the user set up
+  themselves never being torn down
 - the watchdog runs with no active display at all
 - a saved profile competing with automatic mode, in both directions
+- a display with no stable UUID still getting a key that survives reconnect
 - the panic button, which must not overwrite a saved profile
-- `doctor`'s four verdicts, including that its probe always puts the panel back
+- a failure to turn off never being persisted as a profile that retries forever
+- `doctor`'s four verdicts, and its probe reporting a panel it couldn't restore
 - the built-in display dropping off the system lists entirely
 - `nolid://` URL parsing, and change notices firing on transitions only
 
 No XCTest and no `Package.swift`, to match the rest of the project: a plain
 binary that exits non-zero on the first failing expectation, which is all CI
-needs. 78 expectations at the time of writing.
+needs. 134 expectations at the time of writing.
 
 Every one of them has been checked by reverting the code it covers and
 confirming it fails. A suite that has never failed proves nothing.

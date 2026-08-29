@@ -31,6 +31,13 @@ jobs:
           ./build/nolid status && exit 1 || test $? -eq 1
           # An unknown option is a usage error, not a silent no-op.
           ./build/nolid status --bogus && exit 1 || test $? -eq 2
+          # doctor works without the app. A CI runner has no built-in display,
+          # so the probe skips and the exit code must still be 0 — reaching 4
+          # here would mean it thinks it left a display unusable.
+          ./build/nolid doctor --no-probe > /dev/null
+          ./build/nolid doctor --json > /dev/null
+          # Commands that turn displays off must refuse without the app.
+          ./build/nolid off && exit 1 || test $? -eq 1
 
       - name: Check App Intents metadata was generated
         run: |

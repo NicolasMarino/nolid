@@ -477,6 +477,318 @@ test("an unknown option is reported rather than silently dropped") {
     expect(options.command, "status", "the verb is still found")
 }
 
+// MARK: - The way back is verified as hard as the way out
+
+test("a failed re-enable is reported instead of passing silently") {
+    let (manager, backend, notices, _) = makeManager(externals: [2])
+    manager.setBuiltInOff(true)
+    expect(manager.isBuiltInOff, "precondition: the built-in is off")
+
+    backend.reEnableFails = true
+    manager.setBuiltInOff(false)
+
+    expect(backend.activeDisplays().contains(1), false, "the fake must keep it disabled")
+    expect(notices.warnings.isEmpty, false, "silence here is the bug: it must warn")
+}
+
+test("the watchdog reports being unable to bring the last display back") {
+    let (manager, backend, notices, _) = makeManager(externals: [2])
+    manager.setBuiltInOff(true)
+
+    // The external goes away while the built-in is hard-disabled, and the way
+    // back is broken: zero active displays, the worst state the app can reach.
+    backend.reEnableFails = true
+    backend.unplugExternals()
+    manager.safetyCheck()
+
+    expect(backend.activeDisplays().isEmpty, "precondition: no display is active")
+    expect(notices.warnings.isEmpty, false, "the user must be told, not left guessing")
+}
+
+test("a mirror that cannot be undone counts as a failure") {
+    let (manager, backend, notices, _) = makeManager(externals: [2]) {
+        $0.supportsHardDisable = false
+    }
+    manager.setBuiltInOff(true)
+    expect(backend.isMirroringAnother(1), "precondition: the fallback mirrored it")
+
+    backend.unmirrorFails = true
+    manager.setBuiltInOff(false)
+
+    expect(backend.isMirroringAnother(1), "the fake must keep it mirrored")
+    expect(notices.warnings.isEmpty, false, "a stuck mirror is not a success")
+}
+
+test("the panic button reports when it recovers nothing") {
+    let (manager, backend, notices, _) = makeManager(externals: [2])
+    manager.setBuiltInOff(true)
+
+    backend.reEnableFails = true
+    backend.unplugExternals()
+    let recovered = manager.enableAllDisplays()
+
+    expect(recovered, false, "panic must admit it failed")
+    expect(notices.warnings.isEmpty, false, "and say so out loud")
+}
+
+// MARK: - The mirror fallback survives a crash
+
+test("the mirror fallback is remembered across a process restart") {
+    let (manager, backend, _, defaults) = makeManager(externals: [2]) {
+        $0.supportsHardDisable = false
+    }
+    manager.setBuiltInOff(true)
+    expect(backend.isMirroringAnother(1), "precondition: mirrored by the fallback")
+
+    // A crash: no teardown runs, a new manager comes up on the same defaults
+    // and the same hardware.
+    let reborn = DisplayManager(backend: backend, notices: RecordingNoticeSink(),
+                                defaults: defaults)
+    reborn.enableAllDisplays()
+
+    expect(backend.isMirroringAnother(1), false,
+           "panic after a crash must still undo our own mirror")
+}
+
+test("a mirror the user set up themselves is never torn down") {
+    let (_, backend, _, defaults) = makeManager(externals: [2])
+    // Nothing in NoLid created this one.
+    backend.setMirror(1, of: 2)
+
+    let manager = DisplayManager(backend: backend, notices: RecordingNoticeSink(),
+                                 defaults: defaults)
+    manager.start()
+    manager.enableAllDisplays()
+
+    expect(backend.isMirroringAnother(1), "someone else's mirror is not ours to undo")
+    manager.stop()
+}
+
+test("a stale fallback flag is cleared when the hardware disagrees") {
+    let (manager, backend, _, defaults) = makeManager(externals: [2]) {
+        $0.supportsHardDisable = false
+    }
+    manager.setBuiltInOff(true)
+    manager.setBuiltInOff(false)   // the user wants it on again
+    manager.stop()
+
+    // A reboot: the mirror set is gone, but the flag survived on disk. Put it
+    // back by hand, which is the state a crash mid-mirror would leave behind.
+    defaults.set(true, forKey: "usingMirrorFallback")
+    backend.mirrors.removeAll()
+
+    let reborn = DisplayManager(backend: backend, notices: RecordingNoticeSink(),
+                                defaults: defaults)
+    reborn.start()
+
+    // With the flag still set, this next mirror would look like ours to undo.
+    backend.setMirror(1, of: 2)
+    reborn.enableAllDisplays()
+
+    expect(backend.isMirroringAnother(1), "a stale flag must not authorise breaking it")
+    reborn.stop()
+}
+
+// MARK: - A failure must not be persisted as a preference
+
+test("failing to turn off does not leave a profile asking to retry forever") {
+    let (manager, _, notices, _) = makeManager(externals: [2]) {
+        $0.supportsHardDisable = false
+        $0.mirrorFails = true
+    }
+    manager.profiles.enabled = true
+
+    manager.setBuiltInOff(true)
+
+    expect(manager.isBuiltInOff, false, "it could not be turned off")
+    expect(manager.profiles.desiredOff(for: manager.topologyKey), false,
+           "the profile must not keep asking for a state that cannot be reached")
+    expect(notices.warnings.isEmpty, false, "and the failure must be reported")
+}
+
+test("losing the last monitor mid-operation is reported, not swallowed") {
+    let (manager, backend, notices, _) = makeManager(externals: [2]) {
+        // Success on the way out, nothing actually disabled: the run continues
+        // into the mirroring fallback, which is where the race lives.
+        $0.hardDisableLies = true
+    }
+
+    // The external is yanked between the check that said "you may turn it off"
+    // and the read that looks for something to mirror onto. Unreachable from a
+    // single-threaded test any other way, and entirely reachable on a desk.
+    backend.afterSetEnabled = { _, enabled in
+        if enabled { backend.unplugExternals() }
+    }
+
+    manager.setBuiltInOff(true)
+
+    expect(manager.isBuiltInOff, false, "there was nothing left to mirror onto")
+    expect(notices.warnings.isEmpty, false, "the README promises failures always notify")
+}
+
+// MARK: - Stable identity
+
+test("a display with no UUID does not get a key that changes on reconnect") {
+    let anonymous = FakeDisplayBackend()
+    anonymous.online = [1, 2]
+    anonymous.uuidsUnavailable = true
+
+    let first = DisplayProfiles.key(for: [2], using: anonymous)
+    // Same physical monitor, new id after a reconnect.
+    anonymous.online = [1, 77]
+    let second = DisplayProfiles.key(for: [77], using: anonymous)
+
+    expect(first, second, "a key built from the volatile id could never match again")
+}
+
+test("the probe reports a failed restore separately from the verdict") {
+    let backend = FakeDisplayBackend()
+    backend.online = [1, 2]
+    backend.reEnableFails = true
+
+    let result = CapabilityProbe(backend: backend).run(builtIn: 1, enabled: true,
+                                                       appReportsOff: false)
+
+    expect(result.restored, false, "the screen is still dark and that must be visible")
+    expect(result.outcome, .hardDisableWorks, "the capability answer is still true")
+    expect(result.detail.contains("came back"), false,
+           "it must not claim a return that did not happen")
+}
+
+test("a clean probe reports the display restored") {
+    let backend = FakeDisplayBackend()
+    backend.online = [1, 2]
+
+    let result = CapabilityProbe(backend: backend).run(builtIn: 1, enabled: true,
+                                                       appReportsOff: false)
+
+    expect(result.restored, "nothing failed, so nothing to warn about")
+    expect(backend.activeDisplays().contains(1), "and the panel is back")
+}
+
+// MARK: - The CLI and the app agree on the protocol
+
+test("the CLI speaks the same channel names as the app") {
+    expect(RemoteControl.prefix, "dev.nolid.command.", "the command prefix is part of the contract")
+    expect(RemoteControl.replyPrefix, "dev.nolid.status.", "so is the reply channel")
+}
+
+test("each request gets its own reply channel") {
+    let a = RemoteControl.replyName(for: "aaa")
+    let b = RemoteControl.replyName(for: "bbb")
+
+    expect(a != b, "two concurrent callers must not share an inbox")
+    expect(a.rawValue, "dev.nolid.status.aaa", "the name is derived from the token")
+    expect(a.rawValue.hasPrefix(RemoteControl.replyPrefix), "and stays under the prefix")
+}
+
+// MARK: - Ownership of the mirror cannot be lost by a failed attempt
+
+test("a failed unmirror does not silently forfeit the claim on our own mirror") {
+    let (manager, backend, notices, _) = makeManager(externals: [2]) {
+        $0.supportsHardDisable = false
+    }
+    manager.setBuiltInOff(true)
+    expect(backend.isMirroringAnother(1), "precondition: mirrored by the fallback")
+
+    // First attempt fails. Reported, correctly.
+    backend.unmirrorFails = true
+    manager.setBuiltInOff(false)
+    expect(notices.warnings.isEmpty, false, "the first failure is reported")
+    expect(backend.isMirroringAnother(1), "and it is still mirrored")
+
+    // The transient failure clears. A second attempt must still know the mirror
+    // is ours, and undo it. Forgetting that is a permanent silent failure.
+    backend.unmirrorFails = false
+    let recovered = manager.enableAllDisplays()
+
+    expect(backend.isMirroringAnother(1), false, "the retry must actually undo it")
+    expect(recovered, "and report success only once it really is undone")
+}
+
+test("panic does not call a still-mirrored panel recovered") {
+    let (manager, backend, _, _) = makeManager(externals: [2]) {
+        $0.supportsHardDisable = false
+    }
+    manager.setBuiltInOff(true)
+
+    backend.unmirrorFails = true
+    let recovered = manager.enableAllDisplays()
+
+    // The panel is mirrored at zero brightness. It is still in the active list,
+    // so counting active displays alone would call this a success.
+    expect(backend.activeDisplays().isEmpty, false, "it is technically still active")
+    expect(recovered, false, "but it is not usable, and panic must say so")
+}
+
+test("a mirror reconfigured by the user stops being ours") {
+    let (manager, backend, _, defaults) = makeManager(externals: [2, 3]) {
+        $0.supportsHardDisable = false
+    }
+    manager.setBuiltInOff(true)
+    let ourMaster = backend.mirrorSource(of: 1)
+    expect(ourMaster != nil, "precondition: we built a mirror set")
+
+    // Force quit, then the user rebuilds the mirror against the other monitor.
+    manager.stop()
+    let theirMaster: CGDirectDisplayID = (ourMaster == 2) ? 3 : 2
+    backend.setMirror(1, of: theirMaster)
+
+    let reborn = DisplayManager(backend: backend, notices: RecordingNoticeSink(),
+                                defaults: defaults)
+    reborn.start()
+    reborn.enableAllDisplays()
+
+    expect(backend.isMirroringAnother(1), "their arrangement is not ours to undo")
+    reborn.stop()
+}
+
+// MARK: - Ambiguous topologies are not remembered
+
+test("two different anonymous monitors do not share a saved preference") {
+    let anonymous = FakeDisplayBackend()
+    anonymous.online = [1, 2]
+    anonymous.uuidsUnavailable = true
+
+    let key = DisplayProfiles.key(for: [2], using: anonymous)
+    expect(DisplayProfiles.isPersistable(key), false,
+           "a key that cannot tell two monitors apart must not be stored")
+}
+
+test("an unidentifiable topology falls back rather than guessing") {
+    let suite = "dev.nolid.tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+
+    let profiles = DisplayProfiles(defaults: defaults)
+    let anonymous = FakeDisplayBackend()
+    anonymous.online = [1, 2]
+    anonymous.uuidsUnavailable = true
+    let key = DisplayProfiles.key(for: [2], using: anonymous)
+
+    profiles.remember(true, for: key)
+
+    expect(profiles.desiredOff(for: key) == nil,
+           "no answer is safer than another monitor's answer")
+    expect(profiles.count, 0, "and nothing was written")
+}
+
+test("a topology with real UUIDs is still remembered") {
+    let suite = "dev.nolid.tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+
+    let profiles = DisplayProfiles(defaults: defaults)
+    let backend = FakeDisplayBackend()
+    backend.online = [1, 2]
+    let key = DisplayProfiles.key(for: [2], using: backend)
+
+    profiles.remember(true, for: key)
+
+    expect(DisplayProfiles.isPersistable(key), "an identified monitor is storable")
+    expect(profiles.desiredOff(for: key), true, "and comes back")
+}
+
 // MARK: - Report
 
 if failures.isEmpty {
