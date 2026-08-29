@@ -27,8 +27,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         installHotKey(HotKeyConfig.load())
 
-        RemoteControl.start { [weak self] command in
-            self?.handle(command)
+        RemoteControl.start { [weak self] command, replyToken in
+            self?.handle(command, replyTo: replyToken)
         }
 
         refreshIcon()
@@ -312,13 +312,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     /// Single routing point for every external trigger: the CLI channel, the
     /// `nolid://` URL scheme and the App Intents all end up here.
-    func handle(_ command: RemoteControl.Command) {
+    ///
+    /// - Parameter token: the caller's return address, present only on the CLI
+    ///   channel. A URL or a Shortcuts action has nowhere to send a reply.
+    func handle(_ command: RemoteControl.Command, replyTo token: String? = nil) {
         switch command {
         case .on:     manager.setBuiltInOff(false)
         case .off:    manager.setBuiltInOff(true)
         case .toggle: manager.toggleBuiltIn()
         case .panic:  manager.enableAllDisplays()
-        case .status: RemoteControl.reply(status: manager.statusSnapshot)
+        case .status: RemoteControl.reply(status: manager.statusSnapshot, to: token)
         }
     }
 

@@ -19,9 +19,10 @@
 import CoreGraphics
 import Foundation
 
-// Must match Sources/RemoteControl.swift
-let commandPrefix = "dev.nolid.command."
-let replyName = Notification.Name("dev.nolid.status")
+// Compiled from Sources/RemoteControl.swift rather than copied. The two
+// binaries have to agree on these names or every command silently stops
+// arriving, and a comment saying "keep these in sync" is not a check.
+let commandPrefix = RemoteControl.prefix
 
 /// The app's preferences, to read the saved brightness and the cached built-in
 /// display id. The CLI has a different bundle id, so the domain is opened by name.
@@ -56,16 +57,17 @@ EXIT CODES
     1  NoLid is not answering and the command needs the app
     2  bad usage
     3  the command had no effect (e.g. turning off with no external monitors)
+    4  a display was left unusable and could not be recovered
 """
 
 let center = DistributedNotificationCenter.default()
 
 // MARK: - Channel to the app
 
-func post(_ command: String) {
+func post(_ command: String, replyTo token: String? = nil) {
     center.postNotificationName(
         Notification.Name(commandPrefix + command),
-        object: nil,
+        object: token,
         userInfo: nil,
         deliverImmediately: true
     )
@@ -78,12 +80,18 @@ func requestStatus(timeout: TimeInterval = 1.5) -> [String: Any]? {
     // throughout, so no synchronization is needed.
     var reply: String?
 
-    let observer = center.addObserver(forName: replyName, object: nil, queue: .main) { note in
+    // A fresh return address per request. Two `nolid` processes running at once
+    // used to be able to read each other's replies, and so could a later poll
+    // in this same loop pick up an answer meant for an earlier one.
+    let token = UUID().uuidString
+    let observer = center.addObserver(
+        forName: RemoteControl.replyName(for: token), object: nil, queue: .main
+    ) { note in
         reply = note.object as? String
     }
     defer { center.removeObserver(observer) }
 
-    post("status")
+    post("status", replyTo: token)
 
     let deadline = Date().addingTimeInterval(timeout)
     while reply == nil, Date() < deadline {
@@ -166,8 +174,10 @@ guard ["on", "off", "toggle", "panic", "status", "doctor"].contains(command) els
 // MARK: - doctor
 
 if command == "doctor" {
-    runDoctor(json: wantsJSON, probe: !skipProbe)
-    exit(0)
+    // The probe is the only command that turns a display off with no watchdog
+    // behind it. If it could not turn it back on, that has to reach a script's
+    // exit code, not just the text a human may never read.
+    exit(runDoctor(json: wantsJSON, probe: !skipProbe) ? 0 : 4)
 }
 
 // MARK: - Commands that change state
@@ -181,8 +191,10 @@ if command != "status" {
             fail("nolid: NoLid is not answering and '\(command)' needs the app running.", code: 1)
         }
         note("nolid: NoLid is not answering; recovering directly.")
+        // Code 4, not 3: this is not "nothing to do", it is an emergency
+        // recovery that failed with the screen still dark.
         guard recoverDirectly() else {
-            fail("nolid: could not recover any display.", code: 3)
+            fail("nolid: could not recover any display.", code: 4)
         }
         exit(0)
     }
@@ -206,9 +218,19 @@ if command != "status" {
     } while Date() < deadline
 
     if !applied {
+        // Only a command that turns the built-in OFF can fail for lack of an
+        // external monitor. Blaming externals for a failed `on` or `panic`
+        // hides the real cause, which is the more serious one of the two.
+        let needsExternal = expected == true
         let canTurnOff = before?["canTurnOff"] as? Bool ?? false
-        let reason = canTurnOff ? "the command had no effect" : "no active external monitors"
-        fail("nolid: \(reason).", code: 3)
+
+        if needsExternal, !canTurnOff {
+            fail("nolid: no active external monitors.", code: 3)
+        }
+        if needsExternal {
+            fail("nolid: the command had no effect.", code: 3)
+        }
+        fail("nolid: the built-in display could not be turned back on.", code: 4)
     }
     exit(0)
 }

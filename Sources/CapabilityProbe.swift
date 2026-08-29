@@ -29,6 +29,12 @@ struct ProbeResult {
     var outcome: ProbeOutcome
     var detail: String
 
+    /// `false` only when the probe physically disabled the built-in display and
+    /// could not bring it back. It is deliberately separate from `outcome`:
+    /// "hard disable works" and "the screen is still dark" are both true at
+    /// once, and collapsing them would let the good news hide the bad.
+    var restored = true
+
     var verdict: String {
         switch outcome {
         case .hardDisableWorks:
@@ -103,17 +109,24 @@ struct CapabilityProbe {
 
         if !accepted {
             return ProbeResult(outcome: .callRejected,
-                               detail: "the call was rejected by the system" + suffix)
+                               detail: "the call was rejected by the system" + suffix,
+                               restored: restored)
         }
         if disappeared {
+            // Deliberately not "and came back" when it did not: the probe is the
+            // one command allowed to turn a display off with no watchdog behind
+            // it, so it does not get to describe a failure as a success.
+            let ending = restored ? " and came back" : ""
             return ProbeResult(
                 outcome: .hardDisableWorks,
-                detail: "the built-in display left the active display list and came back" + suffix
+                detail: "the built-in display left the active display list" + ending + suffix,
+                restored: restored
             )
         }
         return ProbeResult(
             outcome: .reportsSuccessButDoesNothing,
-            detail: "the call returned success but the display stayed active" + suffix
+            detail: "the call returned success but the display stayed active" + suffix,
+            restored: restored
         )
     }
 

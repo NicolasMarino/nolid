@@ -59,31 +59,50 @@ json.dump({p: {"const-values": f"{work}/module.swiftconstvalues"} if p == first 
            for p in paths}, open(f"{work}/outputmap.json", "w"))
 PYMAP
 
+    # Each step below is checked by hand instead of leaning on `set -e`. This
+    # whole block is optional — the app works without it, only the Shortcuts
+    # actions go missing — so a broken or partial Xcode install must not abort
+    # the build before the CLI and the code signing that come after it.
+    metadata_ok=1
+
     # -module-name matters: without it swiftc derives the module from the output
     # binary name, and the mangled names baked into the metadata would not match
     # the ones in the shipped app. Shortcuts would list the actions and fail to
     # run them.
-    swiftc -O -wmo -target "$TARGET" -module-name "$APP_NAME" -framework Carbon \
+    if ! swiftc -O -wmo -target "$TARGET" -module-name "$APP_NAME" -framework Carbon \
         -Xfrontend -const-gather-protocols-file -Xfrontend "$WORK/protocols.json" \
         -Xfrontend -supplementary-output-file-map -Xfrontend "$WORK/outputmap.json" \
-        Sources/*.swift -o "$WORK/scan" >/dev/null
+        Sources/*.swift -o "$WORK/scan" >/dev/null 2>&1
+    then
+        metadata_ok=0
+    fi
 
-    printf '%s\n' "$PWD"/Sources/*.swift > "$WORK/sources.txt"
-    echo "$WORK/module.swiftconstvalues" > "$WORK/constvals.txt"
+    if [ "$metadata_ok" -eq 1 ]; then
+        printf '%s\n' "$PWD"/Sources/*.swift > "$WORK/sources.txt"
+        echo "$WORK/module.swiftconstvalues" > "$WORK/constvals.txt"
 
-    "$PROCESSOR" \
-        --output "$APP/Contents/Resources" \
-        --toolchain-dir "$TOOLCHAIN" \
-        --module-name "$APP_NAME" \
-        --sdk-root "$(xcrun --show-sdk-path)" \
-        --xcode-version "$(xcodebuild -version | sed -n 's/^Build version //p')" \
-        --platform-family macOS \
-        --deployment-target 13.0 \
-        --target-triple "$TARGET" \
-        --source-file-list "$WORK/sources.txt" \
-        --swift-const-vals-list "$WORK/constvals.txt" \
-        --force --quiet-warnings >/dev/null
-    echo "    Metadata.appintents written"
+        if ! "$PROCESSOR" \
+            --output "$APP/Contents/Resources" \
+            --toolchain-dir "$TOOLCHAIN" \
+            --module-name "$APP_NAME" \
+            --sdk-root "$(xcrun --show-sdk-path)" \
+            --xcode-version "$(xcodebuild -version | sed -n 's/^Build version //p')" \
+            --platform-family macOS \
+            --deployment-target 13.0 \
+            --target-triple "$TARGET" \
+            --source-file-list "$WORK/sources.txt" \
+            --swift-const-vals-list "$WORK/constvals.txt" \
+            --force --quiet-warnings >/dev/null 2>&1
+        then
+            metadata_ok=0
+        fi
+    fi
+
+    if [ "$metadata_ok" -eq 1 ]; then
+        echo "    Metadata.appintents written"
+    else
+        echo "    skipped: the metadata step failed, Shortcuts actions will be missing"
+    fi
 else
     echo "    skipped: needs the full Xcode toolchain, Shortcuts actions will be missing"
 fi
@@ -94,7 +113,7 @@ echo "==> Building CLI (${TARGET})"
 swiftc -O -wmo \
     -target "$TARGET" \
     Sources/DisplayAPI.swift Sources/DisplayBackend.swift Sources/CapabilityProbe.swift \
-    Sources/CommandLineOptions.swift \
+    Sources/CommandLineOptions.swift Sources/RemoteControl.swift \
     CLI/*.swift \
     -o "$CLI"
 

@@ -9,7 +9,7 @@
 import CoreGraphics
 import Foundation
 
-func runDoctor(json: Bool, probe: Bool) {
+func runDoctor(json: Bool, probe: Bool) -> Bool {
     let backend = SystemDisplayBackend()
     let builtIn = resolveBuiltIn()
     let externals = DisplayAPI.activeDisplays().filter { !DisplayAPI.isBuiltIn($0) }
@@ -26,6 +26,8 @@ func runDoctor(json: Bool, probe: Bool) {
     } else {
         emitText(builtIn: builtIn, externals: externals, appStatus: appStatus, result: result)
     }
+
+    return result.restored
 }
 
 // MARK: - Output
@@ -92,7 +94,11 @@ private func emitJSON(builtIn: CGDirectDisplayID?, externals: [CGDirectDisplayID
         "brightnessControl": DisplayAPI.supportsBrightness,
         "appRunning": appStatus != nil,
         "displays": displays,
-        "probe": ["outcome": result.outcome.rawValue, "detail": result.detail],
+        "probe": [
+            "outcome": result.outcome.rawValue,
+            "detail": result.detail,
+            "restored": result.restored,
+        ],
         "verdict": result.verdict,
     ]
 
