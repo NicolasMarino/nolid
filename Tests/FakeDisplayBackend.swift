@@ -37,6 +37,10 @@ final class FakeDisplayBackend: DisplayBackend {
     /// it is asked to come back. This is the catastrophic case — the user is
     /// left with no screen — and the one the suite could not represent before.
     var reEnableFails = false
+    /// Only these ids refuse to come back. Models the id that went stale while
+    /// the display was disabled: the call is accepted for everything else, so
+    /// a sweep succeeds exactly where a single targeted retry cannot.
+    var reEnableFailsFor: Set<CGDirectDisplayID> = []
     /// Undoing a mirror fails, so the panel stays mirrored at zero brightness.
     var unmirrorFails = false
 
@@ -89,7 +93,7 @@ final class FakeDisplayBackend: DisplayBackend {
         defer { afterSetEnabled?(id, enabled) }
 
         if enabled {
-            guard !reEnableFails else { return false }
+            guard !reEnableFails, !reEnableFailsFor.contains(id) else { return false }
             hardDisabled.remove(id)
             if !online.contains(id) { online.append(id) }
             return true

@@ -388,7 +388,11 @@ de recuperarla. Hay tres capas independientes:
    integrada vuelve en ~1 s.
 3. **Watchdog cada 8 s.** Corre en modo `.common`, así que sigue vivo con el
    menú abierto o con un panel en pantalla — justo cuando hace falta. Si detecta
-   cero pantallas activas, reactiva la integrada.
+   cero pantallas activas deja de ser quirúrgico: en vez de reintentar el único
+   id de la integrada que cacheó antes de apagarla, reactiva todo lo que el
+   sistema todavía lista. Un id que ya no nombra nada no vuelve a la vida a
+   fuerza de reintentos, y una pantalla en negro es el peor lugar para ser
+   preciso.
 
 Además:
 
@@ -619,7 +623,7 @@ aun así obtiene una clave que sobrevive a la reconexión.
 
 Sin XCTest y sin `Package.swift`, para que combine con el resto del proyecto:
 un binario que sale con código distinto de cero en la primera expectativa que
-falla. 134 expectativas al momento de escribir esto.
+falla. 147 expectativas al momento de escribir esto.
 
 Cada arreglo de un bug real lleva un test que falla sin él. Los dos bugs de
 perfiles que salieron en la revisión están fijados así.

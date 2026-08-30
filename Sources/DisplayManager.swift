@@ -24,6 +24,7 @@ final class DisplayManager {
         static let notifyOnChange = "notifyOnChange"
         static let mirrorFallback = "usingMirrorFallback"
         static let mirrorFallbackMaster = "usingMirrorFallbackMasterUUID"
+        static let dimmed = "builtInDimmed"
     }
 
     private let defaults: UserDefaults
@@ -100,6 +101,19 @@ final class DisplayManager {
     private var mirrorFallbackMaster: String? {
         get { defaults.string(forKey: Key.mirrorFallbackMaster) }
         set { defaults.set(newValue, forKey: Key.mirrorFallbackMaster) }
+    }
+
+    /// `true` when *this app* set the built-in's brightness to zero.
+    ///
+    /// Deliberately separate from `usingMirrorFallback`, because the two
+    /// obligations do not end at the same moment. Unplugging the master makes
+    /// macOS tear our mirror down for us: the mirror is gone, the claim on it
+    /// is correctly dropped — and the panel is still sitting at zero
+    /// brightness, which only we know to undo. Folding both into one flag left
+    /// the display active, unmirrored, and black.
+    private var dimmedBuiltIn: Bool {
+        get { defaults.bool(forKey: Key.dimmed) }
+        set { defaults.set(newValue, forKey: Key.dimmed) }
     }
 
     /// Drops the ownership claim when the hardware no longer matches it.
@@ -293,7 +307,6 @@ final class DisplayManager {
         if wasOurMirror, let builtIn = builtInID {
             backend.setMirror(builtIn, of: nil)
             if !backend.isMirroringAnother(builtIn) {
-                restoreBrightness()
                 usingMirrorFallback = false
                 mirrorFallbackMaster = nil
             }
@@ -301,6 +314,7 @@ final class DisplayManager {
             usingMirrorFallback = false
             mirrorFallbackMaster = nil
         }
+        if dimmedBuiltIn { restoreBrightness() }
 
         // A mirrored display still counts as "active", so the display list alone
         // cannot tell recovery from a panel left mirroring at zero brightness.
@@ -361,7 +375,7 @@ final class DisplayManager {
         if backend.setMirror(builtIn, of: master) {
             usingMirrorFallback = true
             mirrorFallbackMaster = backend.uuid(master)
-            backend.setBrightness(builtIn, 0)
+            if backend.setBrightness(builtIn, 0) { dimmedBuiltIn = true }
             notices.resetThrottle()
         } else {
             abandonDesiredOff("Neither method could turn the built-in display off.")
@@ -398,11 +412,14 @@ final class DisplayManager {
             // the next call would read "not ours", skip the undo entirely and
             // report success, with the panel still mirrored at zero brightness.
             if !backend.isMirroringAnother(builtIn) {
-                restoreBrightness()
                 usingMirrorFallback = false
                 mirrorFallbackMaster = nil
             }
         }
+        // Unconditional, and after the mirror rather than inside it. A panel we
+        // dimmed has to be brought back whether the mirror is still ours, was
+        // torn down by macOS on unplug, or was never involved at all.
+        if dimmedBuiltIn { restoreBrightness() }
         if !backend.activeDisplays().contains(builtIn) {
             backend.setEnabled(builtIn, true)
         }
@@ -481,12 +498,29 @@ final class DisplayManager {
     /// Exposed for tests: one tick of the watchdog.
     func safetyCheck() {
         if backend.activeDisplays().isEmpty {
-            if let builtIn = builtInID { turnOn(builtIn) }
-            notifyChange()
+            // Nothing on screen is not a state to be surgical in. `turnOn`
+            // targets one display: the built-in, by an id that was cached
+            // before it was disabled. If that id no longer names anything —
+            // renumbered across a sleep, a dock, an unplug — or if the private
+            // symbol simply refuses it, every tick retries the same dead call
+            // and the watchdog spins on a black screen forever.
+            //
+            // The sweep is the only thing left that can find a panel whose id
+            // moved, because it asks the system what exists instead of
+            // remembering what used to. The preference is kept: this is a
+            // rescue, not the user changing their mind.
+            if let builtIn = builtInID, turnOn(builtIn) {
+                notifyChange()
+                return
+            }
+            enableAllDisplays(resetPreference: false)
             return
         }
+        // `dimmedBuiltIn` belongs here for the same reason it exists: a panel
+        // left dark reports itself active and unmirrored, so every other test in
+        // this method calls it healthy.
         if externalDisplays.isEmpty, let builtIn = builtInID,
-           isBuiltInOff || usingMirrorFallback {
+           isBuiltInOff || usingMirrorFallback || dimmedBuiltIn {
             turnOn(builtIn)
             notifyChange()
         }
@@ -502,10 +536,15 @@ final class DisplayManager {
         }
     }
 
+    /// Returns the built-in to the brightness it had before we dimmed it.
+    ///
+    /// The debt is cleared only once the hardware accepted the new value: a
+    /// refused call that still marked it repaid would leave the panel dark with
+    /// nothing left that knows to try again.
     private func restoreBrightness() {
         guard let id = builtInID else { return }
         let value = defaults.object(forKey: Key.savedBrightness) as? Double ?? 0.6
-        backend.setBrightness(id, Float(value))
+        if backend.setBrightness(id, Float(value)) { dimmedBuiltIn = false }
     }
 
     // MARK: - Notices

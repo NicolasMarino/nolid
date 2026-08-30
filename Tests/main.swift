@@ -789,6 +789,164 @@ test("a topology with real UUIDs is still remembered") {
     expect(profiles.desiredOff(for: key), true, "and comes back")
 }
 
+// MARK: - Brightness is owed back even when the mirror is gone
+
+test("unplugging the mirror master still gives the brightness back") {
+    let (manager, backend, _, _) = makeManager(externals: [2]) {
+        $0.supportsHardDisable = false
+    }
+
+    manager.setBuiltInOff(true)
+    expect(backend.brightnessValues[1], 0, "precondition: the panel was dimmed")
+
+    // macOS tears down a mirror set whose master went away, so by the time we
+    // look the mirror is already gone and the ownership claim is correctly
+    // dropped. The panel is still black, and only we know why.
+    backend.unplugExternals()
+    manager.reconcile()
+
+    expect(backend.activeDisplays().contains(1), "the panel is active")
+    expect(backend.brightnessValues[1] ?? -1, Float(0.6),
+           "and its brightness came back")
+}
+
+test("the watchdog rescues a panel left dark on the only display") {
+    let (manager, backend, _, defaults) = makeManager(externals: [2]) {
+        $0.supportsHardDisable = false
+    }
+
+    manager.setBuiltInOff(true)
+    backend.unplugExternals()
+    // The mirror is gone and its claim already dropped, so every other test in
+    // `safetyCheck` calls this panel healthy: active, unmirrored, not off.
+    defaults.set(false, forKey: "usingMirrorFallback")
+
+    // No reconfiguration callback at all — a missed notification, a debounce
+    // cancelled by a quit. The periodic check is the last line of defence.
+    manager.safetyCheck()
+
+    expect(backend.brightnessValues[1] ?? -1, Float(0.6),
+           "the watchdog restored the brightness")
+}
+
+test("the dimming survives a crash") {
+    let suite = "dev.nolid.tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+
+    let backend = FakeDisplayBackend()
+    backend.online = [1, 2]
+    backend.supportsHardDisable = false
+
+    let first = DisplayManager(backend: backend, notices: RecordingNoticeSink(),
+                               defaults: defaults)
+    first.setBuiltInOff(true)
+    expect(backend.brightnessValues[1], 0, "precondition: dimmed")
+
+    // The process dies here. Nothing in memory survives; the panel does.
+    backend.unplugExternals()
+
+    let second = DisplayManager(backend: backend, notices: RecordingNoticeSink(),
+                                defaults: defaults)
+    second.apply()
+
+    expect(backend.brightnessValues[1] ?? -1, Float(0.6),
+           "the new process knew it owed the brightness back")
+}
+
+test("panic gives the brightness back after macOS dropped the mirror") {
+    let (manager, backend, _, defaults) = makeManager(externals: [2]) {
+        $0.supportsHardDisable = false
+    }
+
+    manager.setBuiltInOff(true)
+    backend.unplugExternals()
+    // The state after the hardware change has already been reconciled: the
+    // mirror is gone and the claim on it dropped. Panic must not depend on that
+    // claim to notice the panel is still dark.
+    defaults.set(false, forKey: "usingMirrorFallback")
+
+    expect(manager.enableAllDisplays(), true, "panic reports recovery")
+    expect(backend.brightnessValues[1] ?? -1, Float(0.6),
+           "and the panel is visible, not merely powered")
+}
+
+test("a refused brightness call stays owed") {
+    let (manager, backend, _, _) = makeManager(externals: [2]) {
+        $0.supportsHardDisable = false
+    }
+
+    manager.setBuiltInOff(true)
+    backend.unplugExternals()
+
+    // The panel refuses every brightness call for a moment — asleep, or a
+    // DisplayServices hiccup. Marking the debt repaid here would leave nothing
+    // that ever tries again.
+    backend.supportsBrightness = false
+    manager.reconcile()
+
+    backend.supportsBrightness = true
+    manager.safetyCheck()
+
+    expect(backend.brightnessValues[1] ?? -1, Float(0.6),
+           "the next attempt still knew it was owed")
+}
+
+test("a brightness call that never landed is not owed back") {
+    let (manager, backend, _, _) = makeManager(externals: [2]) {
+        $0.supportsHardDisable = false
+        $0.supportsBrightness = false
+    }
+
+    manager.setBuiltInOff(true)
+
+    // Brightness comes back, and the panel is sitting at a value the user chose
+    // themselves. We never dimmed it, so we have no business writing over it.
+    backend.supportsBrightness = true
+    backend.brightnessValues[1] = 0.2
+
+    backend.unplugExternals()
+    manager.reconcile()
+
+    expect(backend.brightnessValues[1] ?? -1, Float(0.2),
+           "the user's own brightness was left alone")
+}
+
+// MARK: - Nothing on screen: the watchdog must stop being surgical
+
+test("with nothing on screen the watchdog stops retrying one dead id") {
+    let (manager, backend, _, _) = makeManager(externals: [2])
+
+    manager.setBuiltInOff(true)
+    expect(backend.activeDisplays(), [2], "precondition: only the external is up")
+
+    // The external goes dark too: a dropped link, a dock that let go, a
+    // monitor asleep. Now there is nothing on screen at all.
+    backend.hardDisabled.insert(2)
+    // And the built-in's id no longer names anything. It was cached before the
+    // panel was disabled, and it is the only id `turnOn` will ever try.
+    backend.reEnableFailsFor = [1]
+
+    manager.safetyCheck()
+
+    expect(backend.activeDisplays().contains(2),
+           "the sweep found the display that could still come back, instead of "
+           + "retrying the dead id every tick forever")
+}
+
+test("the emergency sweep does not decide the user changed their mind") {
+    let (manager, backend, _, defaults) = makeManager(externals: [2])
+
+    manager.setBuiltInOff(true)
+    backend.hardDisabled.insert(2)
+    backend.reEnableFailsFor = [1]
+
+    manager.safetyCheck()
+
+    expect(defaults.bool(forKey: "builtInShouldBeOff"), true,
+           "a rescue restores displays; it does not rewrite the preference")
+}
+
 // MARK: - Report
 
 if failures.isEmpty {

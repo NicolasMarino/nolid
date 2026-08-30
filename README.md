@@ -388,7 +388,10 @@ no way back. There are three independent layers:
    is back within ~1s.
 3. **8s watchdog.** Runs in `.common` mode, so it stays alive with a menu open
    or a panel on screen — exactly when you need it. If it sees zero active
-   displays, it restores the built-in.
+   displays it stops being surgical: rather than retrying the one built-in id
+   it cached before disabling the panel, it re-enables everything the system
+   still lists. An id that no longer names anything cannot be retried back to
+   life, and a black screen is the wrong place to be precise.
 
 On top of that:
 
@@ -639,7 +642,7 @@ so the suite can put it into states real hardware won't reproduce on demand:
 
 No XCTest and no `Package.swift`, to match the rest of the project: a plain
 binary that exits non-zero on the first failing expectation, which is all CI
-needs. 134 expectations at the time of writing.
+needs. 147 expectations at the time of writing.
 
 Every one of them has been checked by reverting the code it covers and
 confirming it fails. A suite that has never failed proves nothing.
