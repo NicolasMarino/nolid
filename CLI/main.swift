@@ -47,9 +47,10 @@ OPTIONS
     --no-probe With `doctor`: skip the live test
     -h, --help Show this help
 
-WITHOUT THE APP RUNNING
-    `panic`, `on` and `doctor` work anyway: they act directly on
-    CoreGraphics. `off` and `toggle` do not, because turning displays off
+WHEN THE APP CANNOT HELP
+    `panic`, `on` and `doctor` act directly on CoreGraphics — both when
+    the app is not answering and when it answers and fails to bring the
+    display back. `off` and `toggle` do not, because turning displays off
     without the app's safety nets has no way to undo itself.
 
 EXIT CODES
@@ -230,7 +231,18 @@ if command != "status" {
         if needsExternal {
             fail("nolid: the command had no effect.", code: 3)
         }
-        fail("nolid: the built-in display could not be turned back on.", code: 4)
+
+        // `on` and `panic` exist to get a screen back, and the app has just
+        // proved it cannot do it. Direct recovery was reserved for an app that
+        // stays silent, but an app that answers and fails leaves the user in
+        // exactly the same place — staring at nothing — while the code that
+        // could help sits one line away, unused. Over `ssh` this is the whole
+        // difference between fixing the machine and reporting it broken.
+        note("nolid: NoLid could not bring the display back; recovering directly.")
+        guard recoverDirectly() else {
+            fail("nolid: could not recover any display.", code: 4)
+        }
+        exit(0)
     }
     exit(0)
 }

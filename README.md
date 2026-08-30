@@ -224,7 +224,7 @@ Profiles:        yes
 Topology:        DELL U2720Q + LG UltraFine
 ```
 
-| Command | Effect | Works without the app |
+| Command | Effect | Works when the app can't |
 |---|---|---|
 | `nolid on` | Turn the built-in display on | ✅ direct |
 | `nolid off` | Turn it off (needs an external monitor) | ❌ |
@@ -395,8 +395,12 @@ no way back. There are three independent layers:
 
 On top of that:
 
-- **`nolid panic` works with the app dead.** The three nets above all live
-  inside the process; this one doesn't. It runs over SSH too.
+- **`nolid panic` and `nolid on` work with the app dead — and with the app
+  alive and failing.** The three nets above all live inside the process; this
+  one doesn't. Direct recovery used to be reserved for an app that stayed
+  silent, which left the worse case uncovered: an app that answers, tries, and
+  cannot deliver puts you in exactly the same place, staring at nothing. Now
+  either failure reaches the same CoreGraphics path. It runs over SSH too.
 - `apply()` is idempotent and the enable path runs **unconditionally**: it also
   restores brightness if macOS tore the mirror set down on its own.
 - **The way back is verified as strictly as the way out.** Turning the built-in

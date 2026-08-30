@@ -217,7 +217,7 @@ Profiles:        yes
 Topology:        DELL U2720Q + LG UltraFine
 ```
 
-| Comando | Efecto | Funciona sin la app |
+| Comando | Efecto | Funciona sin la app o si falla |
 |---|---|---|
 | `nolid on` | Enciende la pantalla integrada | ✅ directo |
 | `nolid off` | La apaga (necesita un monitor externo) | ❌ |
@@ -410,8 +410,12 @@ Además:
 - Al despertar del sleep se reaplica el estado tras 2 s.
 - Al salir de la app se reactiva todo, conservando tu preferencia para el
   próximo arranque.
-- **`nolid panic` funciona con la app muerta.** Las tres redes de arriba viven
-  dentro del proceso; ésta no. Y corre por SSH.
+- **`nolid panic` y `nolid on` funcionan con la app muerta — y con la app viva
+  fallando.** Las tres redes de arriba viven dentro del proceso; ésta no. La
+  recuperación directa estaba reservada para una app que no contestaba, y eso
+  dejaba afuera el caso peor: una app que contesta, lo intenta y no puede te
+  deja exactamente en el mismo lugar, mirando nada. Ahora las dos fallas llegan
+  al mismo camino de CoreGraphics. Y corre por SSH.
 - **Botón de pánico**: "Restore all displays" en el menú, o
   `nolid panic` desde cualquier terminal. No toca el perfil guardado: es una
   salida de emergencia, no una decisión de preferencia.
