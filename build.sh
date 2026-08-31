@@ -127,5 +127,8 @@ echo "Done: $APP"
 echo "       $CLI"
 echo
 echo "Try:      open $APP"
-echo "Install:  cp -R $APP /Applications/ && open /Applications/${APP_NAME}.app"
-echo "CLI:      sudo cp $CLI /usr/local/bin/ && ${CLI_NAME} doctor"
+# Deliberately not spelled out as two copy commands. The app and the CLI share
+# a control channel, and installing one without the other produces a pair that
+# cannot talk: the CLI reports the app is not answering while it is plainly
+# running. `make install` replaces both or neither.
+echo "Install:  make install"

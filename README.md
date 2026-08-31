@@ -144,10 +144,11 @@ the Shortcuts actions are missing.
 
 ```bash
 git clone https://github.com/NicolasMarino/nolid.git && cd nolid
-./build.sh
-cp -R build/NoLid.app /Applications/
-open /Applications/NoLid.app
+make install
 ```
+
+That builds both binaries, installs them, launches the app, and checks that the
+CLI gets an answer back from it before reporting success.
 
 A laptop icon appears in the menu bar.
 
@@ -158,16 +159,20 @@ Security → Open Anyway**.
 > **Don't see the icon?** It's almost always behind the notch. See
 > [Troubleshooting](#troubleshooting).
 
-The CLI is optional and installs separately:
+`make install` installs the `nolid` CLI alongside the app, into
+`~/.local/bin`. Pass `PREFIX=` to put it elsewhere.
 
-```bash
-sudo cp build/nolid /usr/local/bin/
-nolid doctor
-```
+The two are installed together on purpose, and there is no target that does
+half. They talk over a shared control channel whose shape can change between
+versions, so upgrading one and leaving the other produces a pair that cannot
+talk: the CLI reports "NoLid is not answering" while the app is plainly
+running, which silently takes `nolid status` with it along with the checks the
+other commands make before they act. It looks exactly like a crashed app, and
+it is an easy trap to walk into by following two separate copy commands.
 
 To start the app automatically: NoLid menu → **Launch at login**. Ad-hoc
 signing changes the binary hash on every build, so you have to re-enable it
-after each `./build.sh`.
+after each `make install`.
 
 ## Usage
 
@@ -546,7 +551,7 @@ decision.
 
 A consequence of ad-hoc signing: the binary hash changes on every build and
 `SMAppService` invalidates the previous registration. Re-enable it from the
-menu after each `./build.sh`.
+menu after each `make install`.
 
 If it fails without rebuilding, make sure the app is in `/Applications` and not
 in the build folder.
@@ -570,12 +575,12 @@ you keep what matters — it stops being a separate desktop.
 ## Uninstall
 
 ```bash
-# Turn off Launch at login from the menu, then:
-osascript -e 'tell application "NoLid" to quit'
-rm -rf /Applications/NoLid.app
-sudo rm -f /usr/local/bin/nolid
-defaults delete dev.nolid.app
+make uninstall
 ```
+
+It stops the app, removes both binaries and deletes the saved preferences.
+Turn off **Launch at login** from the menu first, or clear it afterwards in
+System Settings → General → Login Items.
 
 Nothing else is left behind. No daemons, no hand-written LaunchAgents, no
 permanent display configuration changes.
@@ -600,10 +605,12 @@ permanent display configuration changes.
 | `CLI/Doctor.swift` | Live capability probe |
 | `Tests/` | Fake display backend and the suite |
 | `Tools/make-icon.swift` | Draws the app icon from code, run on demand |
+| `Makefile` | Install, uninstall, and the rule that the app and the CLI move together |
 
 `build.sh` compiles with `swiftc -O -wmo` straight against the SDK — no Xcode
 project, no `Package.swift`, no dependencies. `test.sh` builds and runs the
-suite the same way.
+suite the same way. The `Makefile` is a thin front door over both, and the one
+place that knows the app and the CLI must never be installed apart.
 
 The icon is generated, not hand-drawn:
 

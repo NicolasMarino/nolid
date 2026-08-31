@@ -137,10 +137,11 @@ faltan las acciones de Atajos.
 
 ```bash
 git clone https://github.com/NicolasMarino/nolid.git && cd nolid
-./build.sh
-cp -R build/NoLid.app /Applications/
-open /Applications/NoLid.app
+make install
 ```
+
+Compila los dos binarios, los instala, lanza la app y comprueba que la CLI
+recibe respuesta antes de dar el visto bueno.
 
 Aparece un icono de portátil en la barra de menús.
 
@@ -151,16 +152,20 @@ Privacidad y seguridad → Abrir de todos modos**.
 > **El icono no aparece?** Casi siempre está detrás de la muesca. Ver
 > [Solución de problemas](#solución-de-problemas).
 
-La CLI es opcional y va aparte:
+`make install` instala la CLI `nolid` junto con la app, en `~/.local/bin`.
+Con `PREFIX=` la ponés en otro lado.
 
-```bash
-sudo cp build/nolid /usr/local/bin/
-nolid status
-```
+Las dos se instalan juntas a propósito, y no hay ningún target que haga la
+mitad. Hablan por un canal de control compartido cuya forma puede cambiar entre
+versiones, así que actualizar una y dejar la otra deja un par que no se
+entiende: la CLI informa "NoLid is not answering" con la app perfectamente
+viva, y se lleva puesto `nolid status` junto con las comprobaciones que los
+demás comandos hacen antes de actuar. Se ve idéntico a una app crasheada, y es
+fácil caer siguiendo dos comandos de copia por separado.
 
 Para que la app arranque sola: menú de NoLid → **Abrir al iniciar sesión**. Con
 firma ad-hoc el hash del binario cambia en cada compilación, así que hay que
-volver a activarlo después de cada `./build.sh`.
+volver a activarlo después de cada `make install`.
 
 ## Uso
 
@@ -545,7 +550,7 @@ mostrará "Sin recordar todavía" hasta que tomes una decisión.
 
 Es consecuencia de la firma ad-hoc: el hash del binario cambia en cada
 compilación y `SMAppService` invalida el registro anterior. Vuelve a activarlo
-desde el menú después de cada `./build.sh`.
+desde el menú después de cada `make install`.
 
 Si falla incluso sin recompilar, asegúrate de que la app está en
 `/Applications` y no en la carpeta de build.
@@ -568,12 +573,12 @@ retroiluminación, conservas lo importante (deja de ser un escritorio aparte).
 ## Desinstalación
 
 ```bash
-# Desactiva el arranque automático desde el menú, luego:
-osascript -e 'tell application "NoLid" to quit'
-rm -rf /Applications/NoLid.app
-sudo rm -f /usr/local/bin/nolid
-defaults delete dev.nolid.app
+make uninstall
 ```
+
+Detiene la app, borra los dos binarios y elimina las preferencias guardadas.
+Desactivá **Abrir al iniciar sesión** desde el menú antes, o limpialo después
+en Ajustes del Sistema → General → Ítems de inicio.
 
 No deja nada más. No hay demonios, ni items de LaunchAgents escritos a mano, ni
 cambios permanentes en la configuración de pantallas.
@@ -598,10 +603,13 @@ cambios permanentes en la configuración de pantallas.
 | `CLI/Doctor.swift` | — | Prueba en vivo de capacidades |
 | `Tests/` | — | Backend de pantallas falso y la suite |
 | `Tools/make-icon.swift` | — | Dibuja el icono por código, se corre a demanda |
+| `Makefile` | — | Instalación, desinstalación, y la regla de que app y CLI van juntas |
 
 `build.sh` compila con `swiftc -O -wmo` directamente contra el SDK — no hay
 proyecto de Xcode, ni `Package.swift`, ni dependencias. Diez archivos y un
-script de cuarenta líneas.
+script de cuarenta líneas. El `Makefile` es una puerta de entrada fina sobre
+todo eso, y el único lugar que sabe que la app y la CLI no se instalan por
+separado.
 
 ## Tests
 
