@@ -8,7 +8,7 @@
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/macOS-13%2B-black?logo=apple">
   <img alt="language" src="https://img.shields.io/badge/Swift-5-orange?logo=swift">
-  <img alt="size" src="https://img.shields.io/badge/c%C3%B3digo-2.6k%20l%C3%ADneas-blue">
+  <img alt="size" src="https://img.shields.io/badge/c%C3%B3digo-2.8k%20l%C3%ADneas-blue">
   <img alt="license" src="https://img.shields.io/badge/licencia-MIT-green">
   <img alt="deps" src="https://img.shields.io/badge/dependencias-0-lightgrey">
 </p>
@@ -40,7 +40,7 @@ Esto es esa función. Nada más.
 | Apagar la integrada con la tapa abierta | ✅ | ✅ |
 | Precio | Gratis (MIT) | $21.99 |
 | Escala de resolución, HiDPI, PIP, XDR... | ❌ | ✅ |
-| Tamaño | 2.6k líneas, 0 dependencias | Aplicación completa |
+| Tamaño | 2.8k líneas, 0 dependencias | Aplicación completa |
 | Telemetría / cuenta / licencia | ❌ | Licencia |
 
 Si quieres el resto de lo que hace BetterDisplay, cómpralo: es buen software.
