@@ -646,6 +646,11 @@ perfiles que salieron en la revisión están fijados así.
   mirroring seguiría funcionando.
 - No está notarizada y no puede entrar en la Mac App Store, precisamente por esa
   API privada.
+- **No hay cask de Homebrew.** El 2026-09-01 Homebrew dejó de soportar casks que
+  no pasan Gatekeeper, y una app firmada ad-hoc no los pasa — `--no-quarantine`,
+  que era la vuelta, se eliminó en Homebrew 4.7. Notarizarla lo resolvería y
+  requiere una cuenta de Apple Developer de pago. Mientras tanto, la descarga y
+  `make install` son los caminos.
 - `applicationWillTerminate` no se ejecuta en un crash ni en "Forzar salida".
   Para esos casos está el estado `.forSession`, que se limpia al cerrar sesión.
 - Compilado en modo lenguaje Swift 5. Migrar a Swift 6 requiere marcar

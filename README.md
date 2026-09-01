@@ -668,6 +668,11 @@ being reverted by a stale one — are both pinned that way.
   fallback would keep working.
 - Not notarized, and it can't ship on the Mac App Store, precisely because of
   that private API.
+- **No Homebrew cask.** Homebrew ended support for casks that fail Gatekeeper
+  checks on 2026-09-01, and an ad-hoc signed app fails them — `--no-quarantine`,
+  which used to be the way around it, was removed in Homebrew 4.7. Notarizing
+  would fix this and needs a paid Apple Developer account. Until then the
+  download and `make install` are the ways in.
 - `applicationWillTerminate` doesn't run on a crash or a Force Quit. That's what
   `.forSession` state and `nolid panic` are for.
 - Built in Swift 5 language mode. Moving to Swift 6 requires marking
