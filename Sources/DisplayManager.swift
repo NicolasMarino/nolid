@@ -25,6 +25,7 @@ final class DisplayManager {
         static let mirrorFallback = "usingMirrorFallback"
         static let mirrorFallbackMaster = "usingMirrorFallbackMasterUUID"
         static let dimmed = "builtInDimmed"
+        static let disabledExternals = "disabledExternalDisplays"
     }
 
     private let defaults: UserDefaults
@@ -114,6 +115,44 @@ final class DisplayManager {
     private var dimmedBuiltIn: Bool {
         get { defaults.bool(forKey: Key.dimmed) }
         set { defaults.set(newValue, forKey: Key.dimmed) }
+    }
+
+    // MARK: - Externals the user silenced
+
+    /// An external the user deliberately turned off, and how to find it again.
+    ///
+    /// The UUID is the identity: `CGDirectDisplayID` is reassigned on every
+    /// reconnect, so a preference keyed by it could never be matched twice.
+    /// The id is kept anyway because a disabled display can leave the system
+    /// lists entirely, and once it has, its UUID resolves to nothing — the same
+    /// bind the built-in is in, solved the same way. The name is stored so the
+    /// menu can still offer it back by something a human recognises.
+    struct SilencedDisplay: Codable, Equatable {
+        var uuid: String
+        var lastID: UInt32
+        var name: String
+    }
+
+    /// Externals turned off on purpose, keyed by UUID.
+    ///
+    /// Deliberately NOT merged with `desiredOff` into one set of displays.
+    /// The two look alike and behave nothing alike: the built-in turns itself
+    /// off by topology and is rescued automatically, while one of these is a
+    /// standing instruction from the user that no watchdog may quietly undo.
+    /// One representation for two obligations is exactly how the brightness
+    /// was lost when a mirror went away.
+    private(set) var silenced: [String: SilencedDisplay] {
+        get {
+            guard let data = defaults.data(forKey: Key.disabledExternals),
+                  let decoded = try? JSONDecoder().decode(
+                      [String: SilencedDisplay].self, from: data)
+            else { return [:] }
+            return decoded
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            defaults.set(data, forKey: Key.disabledExternals)
+        }
     }
 
     /// Drops the ownership claim when the hardware no longer matches it.
@@ -207,7 +246,36 @@ final class DisplayManager {
         return backend.isMirroringAnother(id)
     }
 
-    var canTurnOffBuiltIn: Bool { !externalDisplays.isEmpty }
+    /// `true` when turning `id` off would still leave something on screen.
+    ///
+    /// The single rule the whole feature rests on, and it is deliberately about
+    /// *any* display rather than the built-in: "at least one other display stays
+    /// active" is the invariant, and the built-in was only ever a special case
+    /// of it. Evaluated live on every call, never cached, because the answer
+    /// changes the moment a cable moves.
+    func canDisable(_ id: CGDirectDisplayID) -> Bool {
+        backend.activeDisplays().contains { $0 != id }
+    }
+
+    var canTurnOffBuiltIn: Bool {
+        guard let builtIn = builtInID else { return false }
+        return canDisable(builtIn)
+    }
+
+    /// Externals the system still lists, whether or not they are active.
+    ///
+    /// `externalDisplays` reports what is usable; this reports what is plugged
+    /// in. A display we turned off can drop out of both lists, so anything the
+    /// user has to be able to turn back on is carried by `silenced` instead.
+    var connectedExternals: [CGDirectDisplayID] {
+        backend.onlineDisplays().filter { !backend.isBuiltIn($0) }
+    }
+
+    /// `true` when this display is one the user silenced.
+    func isSilenced(_ id: CGDirectDisplayID) -> Bool {
+        guard let uuid = backend.uuid(id) else { return false }
+        return silenced[uuid] != nil
+    }
 
     var backendDescription: String {
         backend.supportsHardDisable
@@ -282,6 +350,122 @@ final class DisplayManager {
         apply()
     }
 
+    /// Turns an external monitor off, or brings it back.
+    ///
+    /// The case this exists for: a monitor wired to the Mac on one input and to
+    /// something else on another. Switch it to the other input and macOS never
+    /// notices — the link on its own port stays up, so it keeps handing that
+    /// screen windows you cannot see.
+    ///
+    /// Only the hard disable is used here, never the mirroring fallback. On the
+    /// built-in the fallback is worth its awkwardness because there is no other
+    /// way to quiet that panel. On an external it would mirror your other
+    /// desktop onto a monitor you are using for something else, and add one more
+    /// state that can be left half torn down. Refusing is the better answer.
+    func setExternalOff(_ id: CGDirectDisplayID, _ off: Bool) {
+        guard !backend.isBuiltIn(id) else { return }
+        guard let uuid = backend.uuid(id) else {
+            notices.warn("This monitor reports no stable identity, so NoLid "
+                + "cannot reliably turn it back on. Refusing to turn it off.")
+            return
+        }
+
+        guard off else { restore(uuid); return }
+
+        guard backend.supportsHardDisable else {
+            notices.warn("Turning an external monitor off needs the hard disable "
+                + "this Mac does not support. Run `nolid doctor` for detail.")
+            return
+        }
+        guard canDisable(id) else {
+            notices.warn("That is the only display left: it cannot be turned off.")
+            return
+        }
+
+        // Recorded before the attempt, not after. If the call succeeds and the
+        // display drops out of every system list, this record is the only thing
+        // left that knows the monitor exists and that we owe it a way back.
+        var current = silenced
+        current[uuid] = SilencedDisplay(uuid: uuid, lastID: id, name: backend.name(id))
+        silenced = current
+
+        if !disableExternal(id) {
+            current.removeValue(forKey: uuid)
+            silenced = current
+            notices.warn("That monitor could not be turned off.")
+        }
+        notifyChange()
+    }
+
+    /// Brings a silenced monitor back and forgets the instruction.
+    ///
+    /// By UUID rather than by id, because a display that is off may be absent
+    /// from every list the system will answer questions about.
+    func restore(_ uuid: String) {
+        defer { notifyChange() }
+        guard let record = silenced[uuid] else { return }
+
+        var recovered = false
+        if let id = resolve(record) {
+            backend.setEnabled(id, true)
+            recovered = backend.activeDisplays().contains(id)
+        }
+
+        // The id we remembered can name nothing at all by now — renumbered while
+        // it was gone, or moved to another port. Asking the system what exists
+        // is the only thing left that can find it, and it is what the watchdog
+        // already falls back to.
+        if !recovered {
+            for candidate in backend.onlineDisplays() {
+                backend.setEnabled(candidate, true)
+            }
+            recovered = resolve(record).map {
+                backend.activeDisplays().contains($0)
+            } ?? false
+        }
+
+        // Forgotten either way. Left in place after a failure it would be
+        // re-applied on the next tick, quietly turning off a monitor the user
+        // had just asked to get back.
+        var current = silenced
+        current.removeValue(forKey: uuid)
+        silenced = current
+
+        if !recovered {
+            notices.warn("\(record.name) could not be brought back. "
+                + "Unplug and replug it, or run `nolid panic`.")
+        }
+    }
+
+    /// The display a record points at, or `nil` when it cannot be named safely.
+    private func resolve(_ record: SilencedDisplay) -> CGDirectDisplayID? {
+        if let live = backend.onlineDisplays().first(
+            where: { backend.uuid($0) == record.uuid }) {
+            return live
+        }
+        // Falling back to the remembered id is only safe while it names nothing.
+        // Ids are reused, and the UUID lookup above already failed, so an id
+        // that *is* online now belongs to some other monitor. Turning that one
+        // off instead is not a mistake that announces itself.
+        let cached = CGDirectDisplayID(record.lastID)
+        guard record.lastID != 0, !backend.onlineDisplays().contains(cached) else {
+            return nil
+        }
+        return cached
+    }
+
+    /// Hard disable, verified against the active list rather than the return code.
+    @discardableResult
+    private func disableExternal(_ id: CGDirectDisplayID) -> Bool {
+        guard backend.supportsHardDisable else { return false }
+        backend.setEnabled(id, false)
+        if backend.activeDisplays().contains(id) {
+            backend.setEnabled(id, true)   // undo a call that reported success
+            return false
+        }
+        return true
+    }
+
     /// Panic button: returns every display to a usable state.
     /// - Parameter resetPreference: `false` keeps the stored preference so it can
     ///   be reapplied on the next launch. Used when the app quits.
@@ -293,7 +477,13 @@ final class DisplayManager {
     ///   returning silently was the weaker of the two.
     @discardableResult
     func enableAllDisplays(resetPreference: Bool = true) -> Bool {
-        if resetPreference { desiredOff = false }
+        if resetPreference {
+            desiredOff = false
+            // Cleared, not just overridden. Panic that left these in place would
+            // re-apply them on the very next tick, so the button would appear to
+            // do nothing on exactly the monitor the user was asking about.
+            silenced = [:]
+        }
 
         // A disabled built-in may not show up in `onlineDisplays()`, so the
         // cached id is added explicitly.
@@ -338,6 +528,7 @@ final class DisplayManager {
     /// Drives the observed state towards the desired one. Idempotent.
     /// Exposed for tests: reconciles observed state with desired state.
     func apply() {
+        applySilenced()
         guard let builtIn = builtInID else { notifyChange(); return }
 
         let shouldBeOff = desiredOff && canTurnOffBuiltIn
@@ -351,6 +542,36 @@ final class DisplayManager {
             turnOn(builtIn)
         }
         notifyChange()
+    }
+
+    /// Re-asserts every standing instruction to keep an external off.
+    ///
+    /// Runs on every tick because macOS re-enables a display whenever it feels
+    /// like it: a reconnect, a wake, a resolution change. The instruction has to
+    /// outlive those, or switching the monitor back to the Mac's input would be
+    /// the only thing that ever undid it.
+    private func applySilenced() {
+        let records = silenced
+        guard !records.isEmpty else { return }
+
+        for (uuid, record) in records {
+            guard let id = resolve(record) else { continue }
+            if backend.isBuiltIn(id) {
+                // Never this path. The built-in has its own policy, its own
+                // watchdog and its own way back; a stale record claiming it
+                // would fight all three.
+                var current = silenced
+                current.removeValue(forKey: uuid)
+                silenced = current
+                continue
+            }
+            guard backend.activeDisplays().contains(id) else { continue }
+            // The invariant wins over the instruction, every time. A monitor
+            // the user silenced yesterday does not get to be the reason there
+            // is nothing on screen today.
+            guard canDisable(id) else { continue }
+            disableExternal(id)
+        }
     }
 
     private func turnOff(_ builtIn: CGDirectDisplayID) {
@@ -583,6 +804,8 @@ final class DisplayManager {
             "profilesEnabled": profiles.enabled,
             "notifyOnChange": notifyOnChange,
             "topology": topologyLabel,
+            "silencedCount": silenced.count,
+            "silencedNames": silenced.values.map(\.name).sorted(),
         ]
     }
 }

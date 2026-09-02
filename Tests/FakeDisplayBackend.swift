@@ -43,6 +43,10 @@ final class FakeDisplayBackend: DisplayBackend {
     var reEnableFailsFor: Set<CGDirectDisplayID> = []
     /// Undoing a mirror fails, so the panel stays mirrored at zero brightness.
     var unmirrorFails = false
+    /// A hard-disabled display leaves the online list too, not just the active
+    /// one. That is what real hardware does, and it is the state in which a
+    /// display can no longer be found by its UUID.
+    var disabledVanishFromOnline = false
 
     private(set) var setEnabledCalls: [(CGDirectDisplayID, Bool)] = []
 
@@ -63,7 +67,9 @@ final class FakeDisplayBackend: DisplayBackend {
 
     // MARK: DisplayBackend
 
-    func onlineDisplays() -> [CGDirectDisplayID] { online }
+    func onlineDisplays() -> [CGDirectDisplayID] {
+        disabledVanishFromOnline ? online.filter { !hardDisabled.contains($0) } : online
+    }
 
     func activeDisplays() -> [CGDirectDisplayID] {
         online.filter { !hardDisabled.contains($0) }
@@ -82,8 +88,15 @@ final class FakeDisplayBackend: DisplayBackend {
     /// No display reports a stable identity — docks, KVMs and virtual displays.
     var uuidsUnavailable = false
 
+    /// Identity per display, so a test can hand a reused id to a different
+    /// monitor — the case where trusting a remembered id silences the wrong one.
+    var uuidOverrides: [CGDirectDisplayID: String] = [:]
+    /// Displays that report no identity at all, without disabling the rest.
+    var uuidMissingFor: Set<CGDirectDisplayID> = []
+
     func uuid(_ id: CGDirectDisplayID) -> String? {
-        uuidsUnavailable ? nil : "uuid-\(id)"
+        if uuidsUnavailable || uuidMissingFor.contains(id) { return nil }
+        return uuidOverrides[id] ?? "uuid-\(id)"
     }
     func name(_ id: CGDirectDisplayID) -> String { id == builtIn ? "Built-in" : "Monitor \(id)" }
 
