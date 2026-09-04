@@ -16,7 +16,6 @@ ARCH="$(uname -m)"
 TARGET="${ARCH}-apple-macos13.0"
 
 VERSION="$(Tools/generate-version.sh)"
-GENERATED="build/generated/Version.swift"
 
 echo "==> Version ${VERSION}"
 
@@ -42,7 +41,7 @@ swiftc -O -wmo \
     -target "$TARGET" \
     -module-name "$APP_NAME" \
     -framework Carbon \
-    Sources/*.swift "$GENERATED" \
+    Sources/*.swift \
     -o "$APP/Contents/MacOS/${APP_NAME}"
 
 # Shortcuts discovery needs the App Intents metadata bundle that Xcode normally
@@ -125,7 +124,8 @@ swiftc -O -wmo \
     -target "$TARGET" \
     Sources/DisplayAPI.swift Sources/DisplayBackend.swift Sources/CapabilityProbe.swift \
     Sources/CommandLineOptions.swift Sources/RemoteControl.swift \
-    CLI/*.swift "$GENERATED" \
+    Sources/Version.generated.swift \
+    CLI/*.swift \
     -o "$CLI"
 
 echo "==> Signing (ad-hoc)"
