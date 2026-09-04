@@ -13,6 +13,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let hotKey = HotKey()
     private let recorder = HotKeyRecorder()
     private var hotKeyRegistered = false
+    private var checkingForUpdate = false
 
     override init() {
         super.init()
@@ -56,6 +57,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // MARK: - Menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        // Opening the menu is the trigger, not launch. Someone who never opens
+        // it has not asked NoLid anything, and a menu bar app that phones home
+        // on every login to tell nobody about it is doing it for itself.
+        checkForUpdates(force: false)
         menu.removeAllItems()
 
         let off = manager.isBuiltInOff
@@ -116,6 +121,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(panic)
 
         menu.addItem(info("Method: \(manager.backendDescription)"))
+        menu.addItem(versionItem())
         menu.addItem(.separator())
 
         let quit = NSMenuItem(title: "Quit NoLid", action: #selector(quit), keyEquivalent: "q")
@@ -166,6 +172,98 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 submenu.addItem(clear)
             }
         }
+
+        item.submenu = submenu
+        return item
+    }
+
+    // MARK: Version and updates
+
+    private enum UpdateKey {
+        static let enabled = "checkForUpdates"
+        static let lastSeen = "lastSeenLatestVersion"
+        static let lastCheck = "lastUpdateCheck"
+    }
+
+    /// On by default. `object(forKey:)` rather than `bool(forKey:)` so that
+    /// "never chosen" reads as on, while an explicit off stays off.
+    private var updateChecksEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: UpdateKey.enabled) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: UpdateKey.enabled) }
+    }
+
+    /// The newer version, or `nil` when this build is current.
+    ///
+    /// Recomputed from the stored tag every time rather than stored as a flag,
+    /// so the notice disappears by itself once the update is installed.
+    private var updateAvailable: String? {
+        guard let latest = UserDefaults.standard.string(forKey: UpdateKey.lastSeen),
+              UpdateCheck.isNewer(latest, than: NoLidVersion.current) else { return nil }
+        return latest
+    }
+
+    private func checkForUpdates(force: Bool) {
+        guard updateChecksEnabled || force, !checkingForUpdate else { return }
+
+        if !force {
+            let last = UserDefaults.standard.object(forKey: UpdateKey.lastCheck) as? Date
+            if let last, Date().timeIntervalSince(last) < 60 * 60 * 24 { return }
+        }
+
+        checkingForUpdate = true
+        UpdateCheck.fetchLatestTag { [weak self] tag in
+            DispatchQueue.main.async {
+                self?.checkingForUpdate = false
+                // The timestamp is written even on failure. Retrying every time
+                // the menu opens would turn a flaky network into a stream of
+                // requests nobody asked for.
+                UserDefaults.standard.set(Date(), forKey: UpdateKey.lastCheck)
+                guard let tag else { return }
+                UserDefaults.standard.set(tag, forKey: UpdateKey.lastSeen)
+            }
+        }
+    }
+
+    /// Shows the version, and says so when there is a newer one.
+    private func versionItem() -> NSMenuItem {
+        let newer = updateAvailable
+        let item = NSMenuItem(
+            title: newer.map { "Update available: \($0)" } ?? "Version \(NoLidVersion.current)",
+            action: nil, keyEquivalent: "")
+
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+
+        if let newer {
+            submenu.addItem(info("Installed: \(NoLidVersion.current)"))
+            submenu.addItem(info("Latest: \(newer)"))
+            submenu.addItem(.separator())
+        }
+
+        let open = NSMenuItem(title: newer == nil ? "Release notes…" : "Open the release…",
+                              action: #selector(openReleases), keyEquivalent: "")
+        open.target = self
+        // NoLid does not install its own updates, and the reason is not
+        // laziness: the CLI is half of this app, and an updater that can only
+        // replace the other half would leave the two unable to talk.
+        open.toolTip = "NoLid does not install updates itself. The app and the "
+            + "`nolid` CLI share a control channel and have to be replaced together."
+        submenu.addItem(open)
+
+        let check = NSMenuItem(title: "Check now", action: #selector(checkNow),
+                               keyEquivalent: "")
+        check.target = self
+        submenu.addItem(check)
+
+        submenu.addItem(.separator())
+
+        let auto = NSMenuItem(title: "Check automatically", action: #selector(toggleUpdateChecks),
+                              keyEquivalent: "")
+        auto.target = self
+        auto.state = updateChecksEnabled ? .on : .off
+        auto.toolTip = "Asks GitHub once a day which release is newest. The "
+            + "request carries nothing about you or this Mac."
+        submenu.addItem(auto)
 
         item.submenu = submenu
         return item
@@ -309,6 +407,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         guard let uuid = sender.representedObject as? String else { return }
         manager.restore(uuid)
     }
+
+    @objc private func openReleases() {
+        NSWorkspace.shared.open(UpdateCheck.releasesPage)
+    }
+
+    @objc private func checkNow() { checkForUpdates(force: true) }
+
+    @objc private func toggleUpdateChecks() { updateChecksEnabled.toggle() }
 
     @objc private func toggleProfiles() {
         manager.profiles.enabled.toggle()

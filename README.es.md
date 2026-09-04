@@ -601,6 +601,26 @@ retroiluminación, conservas lo importante (deja de ser un escritorio aparte).
 
 </details>
 
+## Actualizaciones
+
+El menú muestra la versión instalada, y dice **Update available** cuando hay una
+más nueva. Consulta el endpoint público de releases de GitHub como mucho una vez
+por día, y solo cuando abrís el menú — una app de barra de menú que llama a casa
+en cada inicio de sesión para no contarle nada a nadie lo hace en beneficio
+propio. El pedido no lleva nada tuyo ni de esta Mac: sin identificador, sin
+versión, sin telemetría. Se apaga desde el ítem de la versión.
+
+**NoLid no instala sus propias actualizaciones, a propósito.** La app y la CLI
+`nolid` comparten un canal de control cuya forma cambia entre versiones, así que
+un updater que reemplazara solo el `.app` fabricaría el desfasaje descrito en
+[Instalación](#instalación) — en silencio, para todos a la vez. Y compraría
+poco: la app está firmada ad-hoc, así que una actualización descargada igual se
+encuentra con Gatekeeper en el primer arranque. El click que ahorra no es el que
+cuesta.
+
+Para actualizar, corré `make install` de nuevo, o bajá el release y reemplazá
+los dos archivos.
+
 ## Desinstalación
 
 ```bash
@@ -633,7 +653,10 @@ cambios permanentes en la configuración de pantallas.
 | `CLI/main.swift` | — | Entrada de la CLI y recuperación directa |
 | `CLI/Doctor.swift` | — | Prueba en vivo de capacidades |
 | `Tests/` | — | Backend de pantallas falso y la suite |
+| `Sources/UpdateCheck.swift` | — | Comparación de versiones y consulta de releases |
 | `Tools/make-icon.swift` | — | Dibuja el icono por código, se corre a demanda |
+| `Tools/generate-version.sh` | — | Convierte `VERSION` en constante Swift y valor de `Info.plist` |
+| `VERSION` | — | La versión, en un solo lugar. Todo lo demás se deriva de ahí |
 | `Makefile` | — | Instalación, desinstalación, y la regla de que app y CLI van juntas |
 
 `build.sh` compila con `swiftc -O -wmo` directamente contra el SDK — no hay
@@ -666,7 +689,7 @@ aun así obtiene una clave que sobrevive a la reconexión.
 
 Sin XCTest y sin `Package.swift`, para que combine con el resto del proyecto:
 un binario que sale con código distinto de cero en la primera expectativa que
-falla. 187 expectativas al momento de escribir esto.
+falla. 209 expectativas al momento de escribir esto.
 
 Cada arreglo de un bug real lleva un test que falla sin él. Los dos bugs de
 perfiles que salieron en la revisión están fijados así.
