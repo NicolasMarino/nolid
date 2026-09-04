@@ -15,23 +15,29 @@ struct CommandLineOptions: Equatable {
     /// The verb, or `nil` when none was given.
     var command: String?
     var wantsHelp = false
+    var wantsVersion = false
     var wantsJSON = false
     var skipProbe = false
 
     /// Everything that looked like an option but is not one we know.
     var unknownOptions: [String] = []
 
-    private static let known = ["--json", "--no-probe", "--help"]
+    private static let known = ["--json", "--no-probe", "--help", "--version"]
 
     /// - Parameter arguments: `CommandLine.arguments` without the program name.
     init(arguments: [String]) {
         // Help is checked first and against the raw list. Filtering options out
         // before looking for it is what broke it the first time.
         wantsHelp = arguments.contains { $0 == "-h" || $0 == "--help" || $0 == "help" }
+        // Checked against the raw list for the same reason as help, and spelled
+        // both ways because both are muscle memory.
+        wantsVersion = arguments.contains { $0 == "--version" || $0 == "version" }
         wantsJSON = arguments.contains("--json")
         skipProbe = arguments.contains("--no-probe")
 
         unknownOptions = arguments.filter { $0.hasPrefix("-") && !Self.known.contains($0) && $0 != "-h" }
-        command = arguments.first { !$0.hasPrefix("-") && $0 != "help" }
+        command = arguments.first {
+            !$0.hasPrefix("-") && $0 != "help" && $0 != "version"
+        }
     }
 }

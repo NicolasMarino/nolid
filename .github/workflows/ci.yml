@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 jobs:
@@ -22,8 +23,31 @@ jobs:
       - name: Build
         run: ./build.sh
 
+      # The version was hand-maintained in Info.plist once and drifted: v0.1.1
+      # and v0.2.0 both shipped announcing themselves as 0.1.0. Nothing catches
+      # that by review, because the wrong number looks exactly like the right
+      # one. A tag build is the only moment the two can be compared.
+      - name: Check the tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          FILE="$(tr -d ' \t\n' < VERSION)"
+          if [ "$TAG" != "$FILE" ]; then
+            echo "tag $GITHUB_REF_NAME does not match VERSION ($FILE)" >&2
+            exit 1
+          fi
+          # And what the build actually stamps, not just what the file says.
+          BUILT="$(./build/nolid --version | awk '{print $2}')"
+          PLIST="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+              build/NoLid.app/Contents/Info.plist)"
+          test "$BUILT" = "$FILE"
+          test "$PLIST" = "$FILE"
+
       - name: Check the CLI answers
         run: |
+          # A binary too broken to do anything else must still say what it is.
+          ./build/nolid --version | grep -q "^nolid [0-9]"
+          ./build/nolid version | grep -q "^nolid [0-9]"
           # Asking for help must succeed. It did not, once.
           ./build/nolid --help > /dev/null
           ./build/nolid -h > /dev/null

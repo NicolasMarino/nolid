@@ -18,10 +18,13 @@
     <string>APPL</string>
     <key>CFBundleSignature</key>
     <string>????</string>
+    <!-- Placeholders. build.sh stamps both from the VERSION file; editing
+         them here has no effect on what ships. They were hand-maintained
+         once and two releases went out announcing the wrong number. -->
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>0.0.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>0.0.0</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>

@@ -46,6 +46,7 @@ OPTIONS
     --json     Print the result as JSON (with `status` and `doctor`)
     --no-probe With `doctor`: skip the live test
     -h, --help Show this help
+    --version  Print the version and exit
 
 WHEN THE APP CANNOT HELP
     `panic`, `on` and `doctor` act directly on CoreGraphics — both when
@@ -157,6 +158,13 @@ let skipProbe = options.skipProbe
 
 if options.wantsHelp {
     print(usage)
+    exit(0)
+}
+
+// Before the unknown-option check and before any command: a version is the one
+// thing that has to be answerable by a binary too broken to do anything else.
+if options.wantsVersion {
+    print("nolid \(NoLidVersion.current)")
     exit(0)
 }
 

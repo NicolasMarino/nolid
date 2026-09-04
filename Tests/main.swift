@@ -1163,6 +1163,67 @@ test("a stored instruction naming the built-in is dropped, not obeyed") {
            "and the record is gone, so no tick can start that fight")
 }
 
+// MARK: - Knowing there is a newer version
+
+test("a later version is recognised") {
+    expect(UpdateCheck.isNewer("0.2.0", than: "0.1.1"), "minor bump")
+    expect(UpdateCheck.isNewer("0.1.2", than: "0.1.1"), "patch bump")
+    expect(UpdateCheck.isNewer("1.0.0", than: "0.9.9"), "major bump")
+    expect(UpdateCheck.isNewer("v0.3.0", than: "0.2.0"), "the tag's leading v")
+}
+
+test("versions are compared as numbers, not as text") {
+    // The reason this function exists instead of `>`. As strings "0.10.0"
+    // sorts *before* "0.9.0", so a released 0.10.0 would go unannounced —
+    // silently, and for exactly the users who waited longest for it.
+    expect(UpdateCheck.isNewer("0.10.0", than: "0.9.0"),
+           "ten is greater than nine")
+    expect(UpdateCheck.isNewer("0.9.0", than: "0.10.0"), false,
+           "and nine is not greater than ten")
+    expect(UpdateCheck.isNewer("1.0.0", than: "0.100.0"), "across components")
+}
+
+test("the same version is not an update") {
+    expect(UpdateCheck.isNewer("0.2.0", than: "0.2.0"), false, "identical")
+    expect(UpdateCheck.isNewer("v0.2.0", than: "0.2.0"), false, "spelled differently")
+    // Missing trailing components are zero, or every 0.2 release would nag
+    // every 0.2.0 user forever.
+    expect(UpdateCheck.isNewer("0.2", than: "0.2.0"), false, "0.2 is 0.2.0")
+    expect(UpdateCheck.isNewer("0.2.0", than: "0.2"), false, "and the other way")
+}
+
+test("an older version is never offered") {
+    expect(UpdateCheck.isNewer("0.1.0", than: "0.2.0"), false, "going backwards")
+    expect(UpdateCheck.isNewer("0.2.0", than: "0.2.1"), false, "one patch behind")
+}
+
+test("a version this build cannot read is not an update") {
+    // Answering "true" here would tell someone running the newest build that
+    // they are out of date, and no amount of updating would ever clear it.
+    expect(UpdateCheck.isNewer("banana", than: "0.2.0"), false, "not a version")
+    expect(UpdateCheck.isNewer("", than: "0.2.0"), false, "empty")
+    expect(UpdateCheck.isNewer("0.2.x", than: "0.2.0"), false, "half a version")
+    expect(UpdateCheck.isNewer("-1.0.0", than: "0.2.0"), false, "negative")
+    expect(UpdateCheck.isNewer("1.2.3.4.5", than: "0.2.0"), false, "not a shape we use")
+    expect(UpdateCheck.isNewer("0.3.0", than: "nonsense"), false,
+           "and an unreadable *current* version is just as disqualifying")
+}
+
+test("a pre-release is not offered as an update") {
+    // `/releases/latest` already excludes them; this is the belt. Pushing
+    // someone onto a release candidate they never asked for is worse than
+    // telling them nothing.
+    expect(UpdateCheck.isNewer("0.3.0-rc.1", than: "0.2.0"), false, "release candidate")
+    expect(UpdateCheck.isNewer("0.3.0+build.7", than: "0.2.0"), false, "build metadata")
+}
+
+test("the shipped version is a version") {
+    // The build injects this string. If it ever stops being parseable, every
+    // update check silently answers "you are current" forever.
+    expect(UpdateCheck.components(NoLidVersion.current) != nil,
+           "NoLidVersion.current must be comparable — got '\(NoLidVersion.current)'")
+}
+
 // MARK: - Report
 
 if failures.isEmpty {

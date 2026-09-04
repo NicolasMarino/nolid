@@ -267,6 +267,7 @@ Topology:        DELL U2720Q + LG UltraFine
 | `nolid panic` | Restore every display | ✅ direct |
 | `nolid status` | Current state, human readable | ❌ |
 | `nolid doctor` | What this Mac actually supports | ✅ direct |
+| `nolid --version` | Which build this is | ✅ direct |
 
 Exit codes: `0` success, `1` the app is required and isn't answering, `2` bad
 usage, `3` the command had no effect — typically `nolid off` with no external
@@ -602,6 +603,25 @@ you keep what matters — it stops being a separate desktop.
 
 </details>
 
+## Updates
+
+The menu shows the installed version, and says **Update available** when there
+is a newer release. It asks GitHub's public releases endpoint at most once a
+day, and only when you open the menu — a menu bar app that phones home on every
+login to tell nobody about it is doing it for its own benefit. The request
+carries nothing about you or this Mac; there is no identifier, no version, no
+telemetry. Turn it off under the version item.
+
+**NoLid does not install its own updates, on purpose.** The app and the `nolid`
+CLI share a control channel whose shape changes between versions, so an updater
+that replaced only the `.app` would manufacture the mismatch described under
+[Install](#install) — silently, for everyone at once. And it would buy little:
+the app is ad-hoc signed, so a downloaded update still meets Gatekeeper on first
+launch. The click it saves is not the click that costs anything.
+
+To update, run `make install` again, or download the release and replace both
+files.
+
 ## Uninstall
 
 ```bash
@@ -634,7 +654,10 @@ permanent display configuration changes.
 | `CLI/main.swift` | Command line entry point and direct recovery |
 | `CLI/Doctor.swift` | Live capability probe |
 | `Tests/` | Fake display backend and the suite |
+| `Sources/UpdateCheck.swift` | Version comparison and the release lookup |
 | `Tools/make-icon.swift` | Draws the app icon from code, run on demand |
+| `Tools/generate-version.sh` | Turns `VERSION` into a Swift constant and an `Info.plist` value |
+| `VERSION` | The version, in one place. Everything else is derived from it |
 | `Makefile` | Install, uninstall, and the rule that the app and the CLI move together |
 
 `build.sh` compiles with `swiftc -O -wmo` straight against the SDK — no Xcode
@@ -683,7 +706,7 @@ so the suite can put it into states real hardware won't reproduce on demand:
 
 No XCTest and no `Package.swift`, to match the rest of the project: a plain
 binary that exits non-zero on the first failing expectation, which is all CI
-needs. 187 expectations at the time of writing.
+needs. 209 expectations at the time of writing.
 
 Every one of them has been checked by reverting the code it covers and
 confirming it fails. A suite that has never failed proves nothing.
