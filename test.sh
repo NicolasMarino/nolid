@@ -20,12 +20,15 @@ for file in Sources/*.swift; do
     [ "$file" = "Sources/main.swift" ] || SOURCES+=("$file")
 done
 
+GENERATED="build/generated/Version.swift"
+Tools/generate-version.sh > /dev/null
+
 echo "==> Building tests (${TARGET})"
 swiftc -wmo \
     -target "$TARGET" \
     -module-name NoLidTests \
     -framework Carbon \
-    "${SOURCES[@]}" Tests/*.swift \
+    "${SOURCES[@]}" "$GENERATED" Tests/*.swift \
     -o "$BINARY"
 
 echo "==> Running"

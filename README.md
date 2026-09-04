@@ -267,6 +267,7 @@ Topology:        DELL U2720Q + LG UltraFine
 | `nolid panic` | Restore every display | ✅ direct |
 | `nolid status` | Current state, human readable | ❌ |
 | `nolid doctor` | What this Mac actually supports | ✅ direct |
+| `nolid --version` | Which build this is | ✅ direct |
 
 Exit codes: `0` success, `1` the app is required and isn't answering, `2` bad
 usage, `3` the command had no effect — typically `nolid off` with no external

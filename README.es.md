@@ -260,6 +260,7 @@ Topology:        DELL U2720Q + LG UltraFine
 | `nolid panic` | Reactiva todas las pantallas | ✅ directo |
 | `nolid status` | Estado actual, legible | ❌ |
 | `nolid doctor` | Qué soporta este Mac de verdad | ✅ directo |
+| `nolid --version` | Qué build es este | ✅ directo |
 
 Opciones: `--json` para salida legible por máquina (`status` y `doctor`),
 `--no-probe` para que `doctor` omita la prueba en vivo.

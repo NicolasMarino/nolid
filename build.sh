@@ -15,12 +15,23 @@ CLI="build/${CLI_NAME}"
 ARCH="$(uname -m)"
 TARGET="${ARCH}-apple-macos13.0"
 
+VERSION="$(Tools/generate-version.sh)"
+GENERATED="build/generated/Version.swift"
+
+echo "==> Version ${VERSION}"
+
 echo "==> Cleaning"
 rm -rf "$APP" "$CLI"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "==> Bundle"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+# Written here rather than kept by hand in the file. It was kept by hand once,
+# and two releases went out announcing the wrong number.
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" \
+    "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" \
+    "$APP/Contents/Info.plist"
 cp Resources/NoLid.icns "$APP/Contents/Resources/NoLid.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
@@ -31,7 +42,7 @@ swiftc -O -wmo \
     -target "$TARGET" \
     -module-name "$APP_NAME" \
     -framework Carbon \
-    Sources/*.swift \
+    Sources/*.swift "$GENERATED" \
     -o "$APP/Contents/MacOS/${APP_NAME}"
 
 # Shortcuts discovery needs the App Intents metadata bundle that Xcode normally
@@ -114,7 +125,7 @@ swiftc -O -wmo \
     -target "$TARGET" \
     Sources/DisplayAPI.swift Sources/DisplayBackend.swift Sources/CapabilityProbe.swift \
     Sources/CommandLineOptions.swift Sources/RemoteControl.swift \
-    CLI/*.swift \
+    CLI/*.swift "$GENERATED" \
     -o "$CLI"
 
 echo "==> Signing (ad-hoc)"
