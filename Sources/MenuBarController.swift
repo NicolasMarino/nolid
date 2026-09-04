@@ -76,6 +76,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             menu.addItem(info("Connect an external monitor first"))
         }
 
+        if !manager.connectedExternals.isEmpty || !manager.silenced.isEmpty {
+            menu.addItem(externalsItem())
+        }
+
         menu.addItem(.separator())
 
         let auto = NSMenuItem(title: "Automatic mode", action: #selector(toggleAuto), keyEquivalent: "")
@@ -167,6 +171,58 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return item
     }
 
+    // MARK: External monitors submenu
+
+    /// One entry per external, checked while it is on screen.
+    ///
+    /// The case it serves: a monitor wired to the Mac on one input and to
+    /// something else on another. Switching it away leaves macOS convinced the
+    /// screen is still there, so it keeps sending it windows nobody can see.
+    private func externalsItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "External monitors", action: nil, keyEquivalent: "")
+        item.toolTip = "Turn a monitor off while it is showing another input, so "
+            + "macOS stops handing it windows you cannot see."
+
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+
+        var shown = Set<String>()
+        for display in manager.connectedExternals {
+            if let uuid = DisplayAPI.uuid(display) { shown.insert(uuid) }
+            let isOff = manager.isSilenced(display)
+
+            let entry = NSMenuItem(title: DisplayAPI.name(display),
+                                   action: #selector(toggleExternal(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = NSNumber(value: display)
+            entry.state = isOff ? .off : .on
+            // Turning it back on is always allowed. Turning it off is not, when
+            // it is the last thing left on screen.
+            entry.isEnabled = isOff || manager.canDisable(display)
+            submenu.addItem(entry)
+        }
+
+        // A monitor that is off can drop out of every system list, so it cannot
+        // be listed from the hardware. Without these entries the only way back
+        // would be unplugging it.
+        let missing = manager.silenced.values
+            .filter { !shown.contains($0.uuid) }
+            .sorted { $0.name < $1.name }
+        for record in missing {
+            let entry = NSMenuItem(title: record.name,
+                                   action: #selector(restoreExternal(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = record.uuid
+            entry.state = .off
+            submenu.addItem(entry)
+        }
+
+        if submenu.items.isEmpty { submenu.addItem(info("No external monitors")) }
+
+        item.submenu = submenu
+        return item
+    }
+
     // MARK: Mirror master submenu
 
     private func mirrorMasterItem(externals: [CGDirectDisplayID]) -> NSMenuItem {
@@ -242,6 +298,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func toggleAuto() { manager.autoMode.toggle() }
 
     @objc private func enableAll() { manager.enableAllDisplays() }
+
+    @objc private func toggleExternal(_ sender: NSMenuItem) {
+        guard let number = sender.representedObject as? NSNumber else { return }
+        let id = CGDirectDisplayID(number.uint32Value)
+        manager.setExternalOff(id, !manager.isSilenced(id))
+    }
+
+    @objc private func restoreExternal(_ sender: NSMenuItem) {
+        guard let uuid = sender.representedObject as? String else { return }
+        manager.restore(uuid)
+    }
 
     @objc private func toggleProfiles() {
         manager.profiles.enabled.toggle()

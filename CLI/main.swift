@@ -268,7 +268,9 @@ let externals = externalNames.isEmpty
     ? "\(externalCount)"
     : "\(externalCount) (\(externalNames.joined(separator: ", ")))"
 
-let rows = [
+let silencedNames = status["silencedNames"] as? [String] ?? []
+
+var rows = [
     ("Built-in", (status["builtInOff"] as? Bool ?? false) ? "off" : "active"),
     ("External", externals),
     ("Method", text("methodDescription")),
@@ -276,6 +278,13 @@ let rows = [
     ("Profiles", flag("profilesEnabled")),
     ("Topology", text("topology")),
 ]
+
+// Only when there is something to say. A monitor turned off on purpose is
+// invisible in every other line here — it is absent from the external count
+// and from the topology — so without this row the state would be unreportable.
+if !silencedNames.isEmpty {
+    rows.insert(("Turned off", silencedNames.joined(separator: ", ")), at: 2)
+}
 
 let width = rows.map(\.0.count).max() ?? 0
 for (label, value) in rows {

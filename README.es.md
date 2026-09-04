@@ -8,7 +8,7 @@
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/macOS-13%2B-black?logo=apple">
   <img alt="language" src="https://img.shields.io/badge/Swift-5-orange?logo=swift">
-  <img alt="size" src="https://img.shields.io/badge/c%C3%B3digo-2.8k%20l%C3%ADneas-blue">
+  <img alt="size" src="https://img.shields.io/badge/c%C3%B3digo-3.1k%20l%C3%ADneas-blue">
   <img alt="license" src="https://img.shields.io/badge/licencia-MIT-green">
   <img alt="deps" src="https://img.shields.io/badge/dependencias-0-lightgrey">
 </p>
@@ -40,7 +40,7 @@ Esto es esa función. Nada más.
 | Apagar la integrada con la tapa abierta | ✅ | ✅ |
 | Precio | Gratis (MIT) | $21.99 |
 | Escala de resolución, HiDPI, PIP, XDR... | ❌ | ✅ |
-| Tamaño | 2.8k líneas, 0 dependencias | Aplicación completa |
+| Tamaño | 3.1k líneas, 0 dependencias | Aplicación completa |
 | Telemetría / cuenta / licencia | ❌ | Licencia |
 
 Si quieres el resto de lo que hace BetterDisplay, cómpralo: es buen software.
@@ -168,6 +168,36 @@ firma ad-hoc el hash del binario cambia en cada compilación, así que hay que
 volver a activarlo después de cada `make install`.
 
 ## Uso
+
+### Apagar un monitor externo
+
+Un monitor conectado a la Mac por una entrada y a otra cosa por la otra —
+una consola, un decodificador, otra computadora. Cambiás a esa otra entrada y
+macOS no se entera: el link de su propio puerto sigue arriba, así que le sigue
+mandando ventanas que no podés ver y deja que el cursor se te escape ahí.
+
+**External monitors** en el menú lista cada pantalla conectada con un tilde.
+Destildá una y desaparece del sistema; volvé a tildarla cuando devuelvas la
+entrada a la Mac.
+
+Es manual a propósito, en los dos sentidos. macOS no avisa nada cuando cambia
+la entrada de un monitor — desde su punto de vista no pasó nada — así que no
+hay a qué reaccionar. Automatizarlo sería adivinar.
+
+Dos reglas se cumplen siempre:
+
+- **La última pantalla que queda nunca se apaga.** El tilde queda deshabilitado
+  cuando destildarlo dejaría la pantalla vacía, y la instrucción se reevalúa
+  contra el hardware en cada tick: un monitor que apagaste ayer nunca es el
+  motivo de que hoy no haya nada en pantalla.
+- **`nolid panic` y Restore All Displays borran todas las instrucciones.**
+  Pánico significa pánico; dejarlas puestas las reaplicaría un segundo después.
+
+Usa solo el apagado por hardware, nunca el respaldo de mirroring. Espejar un
+externo pondría tu otro escritorio en un monitor que estás usando para otra
+cosa, y agregaría un estado más que puede quedar a medio desarmar. En una Mac
+sin apagado por hardware la opción se niega en vez de hacer algo peor —
+`nolid doctor` te dice qué tipo de Mac tenés.
 
 ### Perfiles por monitor
 
@@ -635,7 +665,7 @@ aun así obtiene una clave que sobrevive a la reconexión.
 
 Sin XCTest y sin `Package.swift`, para que combine con el resto del proyecto:
 un binario que sale con código distinto de cero en la primera expectativa que
-falla. 147 expectativas al momento de escribir esto.
+falla. 187 expectativas al momento de escribir esto.
 
 Cada arreglo de un bug real lleva un test que falla sin él. Los dos bugs de
 perfiles que salieron en la revisión están fijados así.

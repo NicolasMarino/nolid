@@ -176,6 +176,36 @@ after each `make install`.
 
 ## Usage
 
+### Turning an external monitor off
+
+A monitor wired to the Mac on one input and to something else on another —
+a console, a TV box, a second computer. Switch it to that other input and macOS
+never notices: the link on its own port stays up, so it keeps handing that
+screen windows you cannot see and letting the cursor wander onto it.
+
+**External monitors** in the menu lists every connected display with a check
+mark. Uncheck one and it leaves the system entirely; check it again when you
+switch the input back.
+
+It is deliberately manual in both directions. macOS gives no signal when a
+monitor's input changes — from its point of view nothing happened — so there is
+nothing for the app to react to. Automatic behaviour here would mean guessing.
+
+Two rules hold no matter what:
+
+- **The last display standing is never turned off.** The check mark is disabled
+  when unchecking it would leave nothing on screen, and the instruction is
+  re-evaluated against live hardware on every tick — a monitor you silenced
+  yesterday never becomes the reason there is nothing on screen today.
+- **`nolid panic` and Restore All Displays clear every instruction.** Panic
+  means panic; leaving them in place would re-apply them a second later.
+
+This uses the hard disable only, never the mirroring fallback. Mirroring an
+external would put your other desktop on a monitor you are using for something
+else, and add one more state that can be left half torn down. On a Mac without
+hard disable the option refuses rather than doing something worse — `nolid
+doctor` says which kind of Mac you have.
+
 ### Per-monitor profiles
 
 Without profiles there is a single global preference, and automatic mode
@@ -653,7 +683,7 @@ so the suite can put it into states real hardware won't reproduce on demand:
 
 No XCTest and no `Package.swift`, to match the rest of the project: a plain
 binary that exits non-zero on the first failing expectation, which is all CI
-needs. 147 expectations at the time of writing.
+needs. 187 expectations at the time of writing.
 
 Every one of them has been checked by reverting the code it covers and
 confirming it fails. A suite that has never failed proves nothing.

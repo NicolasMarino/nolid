@@ -947,6 +947,222 @@ test("the emergency sweep does not decide the user changed their mind") {
            "a rescue restores displays; it does not rewrite the preference")
 }
 
+// MARK: - Turning an external monitor off
+
+test("an external monitor can be turned off") {
+    let (manager, backend, _, _) = makeManager(externals: [2, 3])
+
+    manager.setExternalOff(2, true)
+
+    expect(backend.activeDisplays().contains(2), false, "the monitor is off")
+    expect(backend.activeDisplays().contains(3), "the other one is untouched")
+    expect(manager.silenced.count, 1, "and the instruction was recorded")
+}
+
+test("the last display standing is never turned off") {
+    let (manager, backend, notices, _) = makeManager(externals: [2])
+
+    // The built-in is already off, so this external is all there is.
+    manager.setBuiltInOff(true)
+    expect(backend.activeDisplays(), [2], "precondition: one display left")
+
+    manager.setExternalOff(2, false || true)
+
+    expect(backend.activeDisplays(), [2], "it must stay on screen")
+    expect(manager.silenced.isEmpty, "and nothing was recorded")
+    expect(notices.warnings.count, 1, "the refusal is reported")
+}
+
+test("the instruction outlives macOS turning the monitor back on") {
+    let (manager, backend, _, _) = makeManager(externals: [2, 3])
+
+    manager.setExternalOff(2, true)
+    // A wake, a reconnect, a resolution change: macOS re-enables it on its own.
+    backend.hardDisabled.remove(2)
+    expect(backend.activeDisplays().contains(2), "precondition: it came back")
+
+    manager.apply()
+
+    expect(backend.activeDisplays().contains(2), false,
+           "the standing instruction was re-applied")
+}
+
+test("restoring brings the monitor back and forgets the instruction") {
+    let (manager, backend, _, _) = makeManager(externals: [2, 3])
+
+    manager.setExternalOff(2, true)
+    manager.setExternalOff(2, false)
+
+    expect(backend.activeDisplays().contains(2), "the monitor is back")
+    expect(manager.silenced.isEmpty, "and nothing is left to re-apply it")
+
+    manager.apply()
+    expect(backend.activeDisplays().contains(2), "it stays back after a tick")
+}
+
+test("a monitor that vanished from the system lists can still be restored") {
+    let (manager, backend, _, _) = makeManager(externals: [2, 3]) {
+        // Real hardware: a hard-disabled display leaves the online list too,
+        // so it can no longer be found by its UUID.
+        $0.disabledVanishFromOnline = true
+    }
+
+    manager.setExternalOff(2, true)
+    expect(backend.onlineDisplays().contains(2), false, "precondition: it is gone")
+
+    manager.restore("uuid-2")
+
+    expect(backend.activeDisplays().contains(2), "the remembered id found it")
+    expect(manager.silenced.isEmpty, "and the record is cleared")
+}
+
+test("a remembered id is not trusted once it names another monitor") {
+    let (manager, backend, _, _) = makeManager(externals: [2, 3]) {
+        $0.disabledVanishFromOnline = true
+    }
+
+    manager.setExternalOff(2, true)
+
+    // The monitor is unplugged while off, and a different one arrives on the
+    // id it used to hold. Ids get reused; identities do not. The newcomer
+    // arrives enabled, the way a freshly plugged monitor does.
+    backend.online.removeAll { $0 == 2 }
+    backend.hardDisabled.remove(2)
+    backend.uuidOverrides[2] = "uuid-someone-else"
+    backend.online.append(2)
+    expect(backend.activeDisplays().contains(2), "precondition: the newcomer is on")
+
+    manager.apply()
+
+    expect(backend.activeDisplays().contains(2),
+           "the newcomer keeps its screen: it is not the monitor we silenced")
+}
+
+test("panic gives every silenced monitor back") {
+    let (manager, backend, _, _) = makeManager(externals: [2, 3])
+
+    manager.setExternalOff(2, true)
+    expect(manager.enableAllDisplays(), true, "panic reports recovery")
+
+    expect(backend.activeDisplays().contains(2), "the monitor is back")
+    expect(manager.silenced.isEmpty,
+           "and panic cleared the instruction, or the next tick would undo it")
+
+    manager.apply()
+    expect(backend.activeDisplays().contains(2), "still back after a tick")
+}
+
+test("a monitor with no stable identity is refused") {
+    let (manager, backend, notices, _) = makeManager(externals: [2, 3]) {
+        $0.uuidMissingFor = [2]
+    }
+
+    manager.setExternalOff(2, true)
+
+    expect(backend.activeDisplays().contains(2),
+           "no identity means no way back, so it is left alone")
+    expect(notices.warnings.count, 1, "and the reason is reported")
+}
+
+test("turning an external off needs the hard disable") {
+    let (manager, backend, notices, _) = makeManager(externals: [2, 3]) {
+        // The mirroring fallback is deliberately not used here: it would put
+        // another desktop on a monitor being used for something else.
+        $0.supportsHardDisable = false
+    }
+
+    manager.setExternalOff(2, true)
+
+    expect(backend.activeDisplays().contains(2), "the monitor is untouched")
+    expect(backend.mirrors.isEmpty, "and no mirror was built behind the scenes")
+    expect(notices.warnings.count, 1, "the refusal is reported")
+    // "could not be turned off" would be true and useless. The reason is the
+    // Mac, not the monitor, and there is a command that says so.
+    expect(notices.warnings.first?.contains("doctor") ?? false,
+           "and it points at the command that explains why")
+}
+
+test("the built-in is never silenced through the external path") {
+    let (manager, backend, _, _) = makeManager(externals: [2])
+
+    manager.setExternalOff(1, true)
+
+    expect(backend.activeDisplays().contains(1), "the built-in keeps its own policy")
+    expect(manager.silenced.isEmpty, "and nothing was recorded against it")
+}
+
+test("a silenced monitor never becomes the reason the screen is empty") {
+    let (manager, backend, _, _) = makeManager(externals: [2, 3])
+
+    manager.setExternalOff(2, true)
+    manager.setBuiltInOff(true)
+    expect(backend.activeDisplays(), [3], "precondition: one display left")
+
+    // The last visible monitor is unplugged. Both standing instructions — the
+    // built-in off, monitor 2 off — now point at a black screen.
+    backend.online.removeAll { $0 == 3 }
+    manager.reconcile()
+    manager.safetyCheck()
+
+    expect(backend.activeDisplays().isEmpty, false,
+           "something has to be on screen, whatever was asked for earlier")
+}
+
+test("re-asserting an instruction never empties the screen") {
+    let (manager, backend, _, _) = makeManager(externals: [2, 3])
+
+    manager.setExternalOff(2, true)
+    manager.setBuiltInOff(true)
+    expect(backend.activeDisplays(), [3], "precondition: one display left")
+
+    // macOS brings the silenced monitor back on its own — a wake, a mode
+    // change — and then the monitor that *was* visible is unplugged. The
+    // standing instruction now points at the only screen there is.
+    backend.hardDisabled.remove(2)
+    backend.online.removeAll { $0 == 3 }
+    expect(backend.activeDisplays(), [2], "precondition: only the silenced one is up")
+
+    manager.apply()
+
+    expect(backend.activeDisplays().contains(2),
+           "the instruction yields: it is the last display standing")
+}
+
+test("a monitor that only reports being off is not recorded as off") {
+    let (manager, backend, notices, _) = makeManager(externals: [2, 3]) {
+        // The failure mode the whole project exists for: the private symbol
+        // returns success and disables nothing.
+        $0.hardDisableLies = true
+    }
+
+    manager.setExternalOff(2, true)
+
+    expect(backend.activeDisplays().contains(2), "the monitor really is still on")
+    expect(manager.silenced.isEmpty,
+           "so nothing claims otherwise — a record here would show a check mark "
+           + "against a screen that never went dark")
+    expect(notices.warnings.count, 1, "and the failure is reported")
+}
+
+test("a stored instruction naming the built-in is dropped, not obeyed") {
+    let (manager, backend, _, defaults) = makeManager(externals: [2])
+
+    // `setExternalOff` refuses the built-in, so this state cannot be reached
+    // through the app. The preference file can: it is plain user-writable
+    // defaults, and a record naming the built-in would put two policies in
+    // charge of one display — this one turning it off on every tick, and the
+    // built-in's own path turning it straight back on, forever.
+    let stored = #"{"uuid-1":{"uuid":"uuid-1","lastID":1,"name":"Built-in"}}"#
+    defaults.set(Data(stored.utf8), forKey: "disabledExternalDisplays")
+    expect(manager.silenced.count, 1, "precondition: the record was read back")
+
+    manager.apply()
+
+    expect(backend.activeDisplays().contains(1), "the built-in is untouched")
+    expect(manager.silenced.isEmpty,
+           "and the record is gone, so no tick can start that fight")
+}
+
 // MARK: - Report
 
 if failures.isEmpty {
