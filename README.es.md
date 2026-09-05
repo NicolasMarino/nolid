@@ -621,6 +621,32 @@ cuesta.
 Para actualizar, corré `make install` de nuevo, o bajá el release y reemplazá
 los dos archivos.
 
+## Si la pantalla queda en negro
+
+NoLid registra lo que hizo su recuperación, en un nivel que el log unificado
+escribe a disco, así que sobrevive al reinicio en el que suele terminar una
+pantalla negra. Después de que pase:
+
+```bash
+log show --last 1h --predicate 'subsystem == "dev.nolid.app"' --style compact
+```
+
+Te da el estado al arrancar, cada momento en que se apagó una pantalla y —si
+corrió el rescate— cada intento con los números que distinguen las causas:
+
+```
+no active displays — rescue attempt 1 of 4
+could not restore any display — builtIn=1 online=2 active=0
+```
+
+`builtIn` es el id al que se le pide volver, `online` lo que el sistema todavía
+lista, `active` lo que hay realmente en pantalla. Una llamada rechazada y un id
+que ya no nombra nada se ven idénticos desde afuera; esos tres números los
+separan.
+
+Esa salida vale la pena pegarla en un issue. "Quedó en negro" es un síntoma que
+comparten todas las causas posibles.
+
 ## Desinstalación
 
 ```bash
@@ -689,7 +715,7 @@ aun así obtiene una clave que sobrevive a la reconexión.
 
 Sin XCTest y sin `Package.swift`, para que combine con el resto del proyecto:
 un binario que sale con código distinto de cero en la primera expectativa que
-falla. 209 expectativas al momento de escribir esto.
+falla. 215 expectativas al momento de escribir esto.
 
 Cada arreglo de un bug real lleva un test que falla sin él. Los dos bugs de
 perfiles que salieron en la revisión están fijados así.
