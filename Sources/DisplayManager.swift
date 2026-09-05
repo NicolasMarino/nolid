@@ -198,10 +198,49 @@ final class DisplayManager {
     /// are reported and a reconciliation loop cannot spam.
     private var lastAnnouncedOff: Bool?
 
+    /// Held while any display is deliberately off.
+    ///
+    /// NoLid is an `LSUIElement` agent: no windows, no dock icon, and for long
+    /// stretches no user interaction — the exact profile macOS App Naps most
+    /// eagerly. A napped process gets its timers coalesced and deferred, and
+    /// the watchdog is a timer. Every safety net in this file assumes it runs
+    /// on time, and none of them can assert that about themselves.
+    ///
+    /// Scoped rather than switched off in Info.plist: while every display is
+    /// on there is nothing to rescue, and an agent that refuses to nap for no
+    /// reason is a bad citizen on someone's battery. Idle system sleep stays
+    /// allowed — the point is to stay schedulable, not to keep the Mac awake.
+    private var wakefulness: NSObjectProtocol?
+
+    /// How many times an empty screen is attacked before waiting for a tick.
+    let emptyScreenAttempts = 4
+
+    /// How a retry is scheduled. Replaced in tests so the sequence runs inline
+    /// instead of eight seconds at a time.
+    var scheduleRetry: (@escaping () -> Void) -> Void = { work in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    private func holdAwake(_ needed: Bool) {
+        if needed, wakefulness == nil {
+            wakefulness = ProcessInfo.processInfo.beginActivity(
+                options: .userInitiatedAllowingIdleSystemSleep,
+                reason: "A display is turned off and has to be recoverable")
+        } else if !needed, let token = wakefulness {
+            ProcessInfo.processInfo.endActivity(token)
+            wakefulness = nil
+        }
+    }
+
+    /// `true` when something is off that this app is on the hook to bring back.
+    private var owesARecovery: Bool {
+        desiredOff || !silenced.isEmpty || usingMirrorFallback || dimmedBuiltIn
+    }
+
     private var cachedBuiltIn: CGDirectDisplayID?
     private var lastExternalCount = -1
     private var debounce: DispatchWorkItem?
-    private var watchdog: Timer?
+    private var watchdog: DispatchSourceTimer?
     private var wakeObserver: NSObjectProtocol?
 
     // MARK: - Queries
@@ -300,13 +339,19 @@ final class DisplayManager {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self?.apply() }
         }
 
-        // In `.common` mode so the watchdog keeps running with a menu open or
-        // a panel on screen — exactly when it is needed most.
-        let timer = Timer(timeInterval: 8, repeats: true) { [weak self] _ in
-            self?.safetyCheck()
-        }
-        RunLoop.main.add(timer, forMode: .common)
+        // A strict dispatch source rather than a Timer on the run loop. Both
+        // fire on the main queue, so nothing here becomes concurrent — but
+        // `.strict` opts out of the timer coalescing the system applies to
+        // background apps, and a watchdog that can be deferred is not one.
+        let timer = DispatchSource.makeTimerSource(flags: .strict, queue: .main)
+        timer.schedule(deadline: .now() + 8, repeating: 8, leeway: .milliseconds(100))
+        timer.setEventHandler { [weak self] in self?.safetyCheck() }
+        timer.resume()
         watchdog = timer
+
+        Log.state("started — hard disable: \(backend.supportsHardDisable), "
+        + "active: \(backend.activeDisplays().count), "
+        + "built-in off wanted: \(desiredOff)")
 
         lastExternalCount = externalDisplays.count
         lastAnnouncedOff = isBuiltInOff
@@ -324,8 +369,9 @@ final class DisplayManager {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
         wakeObserver = nil
-        watchdog?.invalidate()
+        watchdog?.cancel()
         watchdog = nil
+        holdAwake(false)
         debounce?.cancel()
     }
 
@@ -581,6 +627,7 @@ final class DisplayManager {
             if !backend.activeDisplays().contains(builtIn) {
                 usingMirrorFallback = false
                 notices.resetThrottle()
+                Log.state("built-in off via hard disable — id \(builtIn)")
                 return
             }
             backend.setEnabled(builtIn, true) // undo the failed attempt
@@ -650,6 +697,9 @@ final class DisplayManager {
         let active = backend.activeDisplays().contains(builtIn)
         let mirrorStuck = wasOurMirror && backend.isMirroringAnother(builtIn)
         guard active, !mirrorStuck else {
+            Log.recoveryFailed(builtIn: builtIn,
+                               online: backend.onlineDisplays().count,
+                               active: backend.activeDisplays().count)
             notices.warn("The built-in display could not be turned back on. "
                 + "Run `nolid panic`, or connect an external monitor.")
             return false
@@ -730,11 +780,7 @@ final class DisplayManager {
             // moved, because it asks the system what exists instead of
             // remembering what used to. The preference is kept: this is a
             // rescue, not the user changing their mind.
-            if let builtIn = builtInID, turnOn(builtIn) {
-                notifyChange()
-                return
-            }
-            enableAllDisplays(resetPreference: false)
+            rescueEmptyScreen(attempt: 1)
             return
         }
         // `dimmedBuiltIn` belongs here for the same reason it exists: a panel
@@ -745,6 +791,36 @@ final class DisplayManager {
             turnOn(builtIn)
             notifyChange()
         }
+    }
+
+    /// Nothing on screen. Tries hard, immediately, and again shortly after.
+    ///
+    /// The previous version made one attempt and waited for the next tick.
+    /// Eight seconds is a long time to stare at nothing, and it is only eight
+    /// seconds if the timer fires on schedule — which is exactly the assumption
+    /// that cannot be checked from inside. At this moment nothing else this app
+    /// does matters, so it stops being polite about it.
+    private func rescueEmptyScreen(attempt: Int) {
+        Log.emptyScreen(attempt: attempt, of: emptyScreenAttempts)
+
+        if let builtIn = builtInID, turnOn(builtIn) {
+            Log.recovered("built-in", active: backend.activeDisplays().count)
+            notifyChange()
+            return
+        }
+        if enableAllDisplays(resetPreference: false) {
+            Log.recovered("sweep", active: backend.activeDisplays().count)
+            return
+        }
+
+        guard attempt < emptyScreenAttempts else {
+            Log.recoveryFailed(builtIn: builtInID,
+                               online: backend.onlineDisplays().count,
+                               active: backend.activeDisplays().count)
+            notifyChange()
+            return
+        }
+        scheduleRetry { [weak self] in self?.rescueEmptyScreen(attempt: attempt + 1) }
     }
 
     // MARK: - Brightness
@@ -771,6 +847,11 @@ final class DisplayManager {
     // MARK: - Notices
 
     private func notifyChange() {
+        // Re-evaluated on every state change rather than at the two obvious
+        // call sites, because "something is off" is reached by more paths than
+        // anyone remembers: the menu, the hotkey, the CLI, automatic mode, a
+        // profile adopted on reconnect.
+        holdAwake(owesARecovery)
         announceIfNeeded()
         if Thread.isMainThread { onChange?() }
         else { DispatchQueue.main.async { [weak self] in self?.onChange?() } }
