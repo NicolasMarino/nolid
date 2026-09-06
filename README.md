@@ -622,6 +622,30 @@ launch. The click it saves is not the click that costs anything.
 To update, run `make install` again, or download the release and replace both
 files.
 
+## If the screen stays black
+
+NoLid records what its recovery did, at a level the unified log writes to disk,
+so it survives the reboot a black screen usually ends in. After it happens:
+
+```bash
+log show --last 1h --predicate 'subsystem == "dev.nolid.app"' --style compact
+```
+
+You get the launch state, every moment a display was turned off, and — if the
+rescue ran — each attempt with the numbers that tell the causes apart:
+
+```
+no active displays — rescue attempt 1 of 4
+could not restore any display — builtIn=1 online=2 active=0
+```
+
+`builtIn` is the id being asked to come back, `online` what the system still
+lists, `active` what is actually on screen. A refused call and an id that names
+nothing look identical from the outside; those three numbers separate them.
+
+That output is worth pasting into an issue. "It stayed black" is a symptom
+shared by every possible cause.
+
 ## Uninstall
 
 ```bash
@@ -706,7 +730,7 @@ so the suite can put it into states real hardware won't reproduce on demand:
 
 No XCTest and no `Package.swift`, to match the rest of the project: a plain
 binary that exits non-zero on the first failing expectation, which is all CI
-needs. 209 expectations at the time of writing.
+needs. 215 expectations at the time of writing.
 
 Every one of them has been checked by reverting the code it covers and
 confirming it fails. A suite that has never failed proves nothing.

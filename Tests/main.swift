@@ -1224,6 +1224,63 @@ test("the shipped version is a version") {
            "NoLidVersion.current must be comparable — got '\(NoLidVersion.current)'")
 }
 
+// MARK: - An empty screen is not waited out
+
+test("the rescue retries until a display comes back") {
+    let (manager, backend, _, _) = makeManager(externals: [2])
+
+    manager.setBuiltInOff(true)
+    backend.hardDisabled.insert(2)
+    expect(backend.activeDisplays().isEmpty, "precondition: nothing on screen")
+
+    // Nothing comes back on the first two passes. Displays are not always ready
+    // the instant they are asked, and one refusal is not proof of anything.
+    backend.reEnableFailsFor = [1, 2]
+    var retries = 0
+    manager.scheduleRetry = { work in
+        retries += 1
+        if retries == 2 { backend.reEnableFailsFor = [] }
+        work()
+    }
+
+    manager.safetyCheck()
+
+    expect(backend.activeDisplays().isEmpty, false,
+           "a later attempt found what the first could not")
+    expect(retries, 2, "and it took the retries to get there")
+}
+
+test("the rescue gives up instead of retrying forever") {
+    let (manager, backend, _, _) = makeManager(externals: [2])
+
+    manager.setBuiltInOff(true)
+    backend.hardDisabled.insert(2)
+    // Nothing will ever come back. The point is that this returns at all: an
+    // unbounded retry would spin here, and on real hardware it would spin on
+    // the main queue with the screen already black.
+    backend.reEnableFails = true
+
+    var retries = 0
+    manager.scheduleRetry = { work in retries += 1; work() }
+
+    manager.safetyCheck()
+
+    expect(retries, manager.emptyScreenAttempts - 1,
+           "bounded by the attempt count, no more and no fewer")
+}
+
+test("a screen that is already fine is not retried at all") {
+    let (manager, backend, _, _) = makeManager(externals: [2])
+
+    var retries = 0
+    manager.scheduleRetry = { work in retries += 1; work() }
+
+    manager.safetyCheck()
+
+    expect(backend.activeDisplays().isEmpty, false, "precondition: all is well")
+    expect(retries, 0, "nothing to rescue, nothing scheduled")
+}
+
 // MARK: - Report
 
 if failures.isEmpty {
